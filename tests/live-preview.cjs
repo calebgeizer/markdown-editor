@@ -146,6 +146,26 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),'Project and [Notes](notes.md)','only the link at the caret must reveal its source');
   await page.locator('.md-link').filter({hasText:'Project'}).click();
   assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),linkSource+' and Notes','clicking the label must reveal the whole link for editing');
+  const bareUrl='https://example.com/camping';
+  await editor.press('ControlOrMeta+a');
+  await page.keyboard.insertText('Trip notes: '+bareUrl+' :tent:\n\nLiteral: `'+bareUrl+'`');
+  await page.context().route(bareUrl,route=>route.fulfill({contentType:'text/plain',body:'Trip notes'}));
+  let opening=page.context().waitForEvent('page');
+  await editor.locator('.md-link').filter({hasText:bareUrl}).click({modifiers:['Meta']});
+  let tripNotes=await opening;
+  await tripNotes.waitForURL(bareUrl);
+  await tripNotes.close();
+  await editor.press('Escape');
+  const tripLink=page.locator('article').getByRole('link',{name:bareUrl,exact:true});
+  assert.equal(await tripLink.count(),1,'a bare URL after a label must link, while inline code stays literal');
+  assert.equal(await tripLink.getAttribute('href'),bareUrl);
+  assert.match(await page.locator('article p').first().innerText(),/⛺/);
+  opening=page.context().waitForEvent('page');
+  await tripLink.click();
+  tripNotes=await opening;
+  await tripNotes.waitForURL(bareUrl);
+  await tripNotes.close();
+  await page.getByRole('button',{name:'Edit',exact:true}).click();
   await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.type('# New heading\nNext line');
   await page.keyboard.press('Home');
   if(process.env.SCREENSHOT_PATH) await page.screenshot({path:process.env.SCREENSHOT_PATH});
@@ -315,7 +335,77 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.emulateMedia({colorScheme:'light'});
   await page.emulateMedia({colorScheme:'dark'});
   assert.equal(await page.getByRole('button',{name:'Switch to dark mode'}).isVisible(),true,'an explicit theme must override the system setting');
+  await page.getByRole('button',{name:'Edit',exact:true}).click();
+  await editor.press('ControlOrMeta+a');
+  const checklist='- [ ] Task\n  - [ ] Nested\n\n```md\n- [] literal\n```\n\n';
+  await page.keyboard.insertText(checklist);
+  await page.keyboard.type('- []');
+  await page.keyboard.insertText('\n');
+  await page.keyboard.type('-[]');
+  const normalized=await download();
+  assert.equal(normalized.trimEnd(),checklist+'- [ ]\n- [ ]','typing either shorthand must normalize only real task markers');
+  const taskLine=editor.locator('.cm-line').filter({hasText:/Task/});
+  await taskLine.click();
+  await editor.press('End');
+  assert.equal(await taskLine.getByRole('checkbox').count(),1,'task text keeps its checkbox while the caret is on the same line');
+  assert.equal(await taskLine.locator('.md-bullet').count(),0,'the checkbox replaces the bullet');
+  await editor.press('Home');
+  await editor.press('ArrowRight');
+  assert.match(await taskLine.innerText(),/- \[ \] Task/,'moving into the marker reveals the task source');
+  await editor.press('Escape');
+  const readTasks=page.locator('article').getByRole('checkbox');
+  assert.equal(await readTasks.count(),4,'empty markers render as checkboxes, including at end of file');
+  assert.equal(await readTasks.first().evaluate(box=>getComputedStyle(box.closest('li')).listStyleType),'none');
+  await readTasks.nth(1).check();
+  assert.equal(await download(),normalized.replace('- [ ] Nested','- [x] Nested'),'Read mode toggles the correct source marker');
+  await page.getByRole('button',{name:'Edit',exact:true}).click();
+  assert.equal(await editor.locator('.cm-line').filter({hasText:'Nested'}).getByRole('checkbox').isChecked(),true);
+  await editor.press('ControlOrMeta+a');
+  const spacer='More trip notes.\n\n'.repeat(30);
+  const footnoteSource=spacer+'Meet at the trailhead.[^arrival]\n\n'+spacer+
+    '[^arrival]: Download the trail map.\n\n    The trailhead has limited mobile reception.'+
+    '\n  \n## After the note\n\nThis text stays in the document. The note is linked again here.[^arrival]';
+  await page.keyboard.insertText(footnoteSource);
+  await editor.press('Escape');
+  const reference=page.getByRole('link',{name:'Footnote 1',exact:true}).first();
+  const returnLink=page.getByRole('link',{name:'Back to footnote 1, reference 1'});
+  const afterNote=page.getByRole('heading',{name:'After the note'});
+  assert.equal(await afterNote.evaluate(heading=>heading.previousElementSibling.className),'footnotes');
+  assert.match(await afterNote.evaluate(heading=>heading.nextElementSibling.textContent),/^This text stays in the document\./);
+  assert.equal(await page.locator('.footnote-item a').count(),2,'a reference after the definition must get a return link too');
+  await reference.click();
+  assert.equal(await returnLink.evaluate(link=>link.parentElement.textContent),'The trailhead has limited mobile reception. ↩ ↩');
+  const main=page.locator('main');
+  const noteScroll=await main.evaluate(element=>element.scrollTop);
+  await returnLink.press('Enter');
+  assert.ok(await main.evaluate(element=>element.scrollTop)<noteScroll,'the return link must scroll back up');
+  assert.ok(await reference.evaluate(link=>{
+    const bounds=link.closest('main').getBoundingClientRect();
+    const context=link.closest('p').getBoundingClientRect();
+    return link.getRootNode().activeElement===link && context.top>bounds.top && context.bottom<bounds.bottom;
+  }),'returning must focus the reference and leave its sentence visible');
+  assert.equal((await download()).trimEnd(),footnoteSource,'saving must preserve the footnote and all subsequent text');
+  const printedNotes=await page.evaluate(()=>{
+    const root=document.querySelector('body > div').shadowRoot;
+    window.dispatchEvent(new Event('beforeprint'));
+    const pages=[...root.querySelectorAll('.print-page')].map(page=>{
+      const notes=page.querySelector('.print-page-notes');
+      return {
+        hasReference:!!page.querySelector('.print-page-body .footnote-reference'),
+        count:notes.querySelectorAll('.footnote-item').length,
+        footerGap:page.getBoundingClientRect().bottom-notes.getBoundingClientRect().bottom
+      };
+    });
+    window.dispatchEvent(new Event('afterprint'));
+    return pages;
+  });
+  assert.ok(printedNotes.length>1,'the footnote fixture must span more than one printed page');
+  const firstReferencePage=printedNotes.find(page=>page.hasReference);
+  assert.equal(firstReferencePage.count,1,'the first reference page must carry the footnote');
+  assert.ok(Math.abs(firstReferencePage.footerGap)<1,'the footnote must sit at the bottom of the page');
+  assert.equal(printedNotes.reduce((count,page)=>count+page.count,0),1,'repeated references must print one note');
+  assert.equal(await page.locator('.print-layout').count(),0);
   assert.deepEqual(errors,[]);
-  console.log('Passed: source-preserving edit/save; active-line marker reveal; inline links and Command-click; deletion of existing # and ** formatting; compact heading height; typed headings; single newline; undo/redo; reading/editing toggle; table row previews; print preparation; mobile layout; no unexpected network requests or JS errors.');
+  console.log('Passed: source-preserving edit/save; marker reveal; inline links and Command-click; headings; single newline; undo/redo; reading/editing toggle; table row previews; print preparation; mobile layout; interactive checklists and shorthand; no unexpected network requests or JS errors.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

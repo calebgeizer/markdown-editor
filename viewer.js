@@ -50,6 +50,7 @@
         --line:#d9d9d0; --divider:#e5e4dc; --panel:#eeede7; --hover:#eae9e1;
         --accent:#24684d; --focus:#83bca5; --syntax:#77796e; --quote-border:#a2b8a4;
         --row-highlight:rgb(108 103 53 / 6%); --editor-selection:#cde2d4;
+        --highlight:#f3df8f; --code-keyword:#803a73; --code-literal:#8a4f17; --code-comment:#686e60;
         background:var(--surface); color:var(--text);
       }
       :host([data-theme="dark"]) {
@@ -58,6 +59,7 @@
         --line:#464f48; --divider:#363e38; --panel:#282e2a; --hover:#343c35;
         --accent:#a0dbbf; --focus:#91c8ae; --syntax:#a6b0a5; --quote-border:#638c75;
         --row-highlight:rgb(255 255 255 / 5%); --editor-selection:#375e50;
+        --highlight:#69561d; --code-keyword:#e4a8d9; --code-literal:#efba82; --code-comment:#a6b0a5;
       }
       * { box-sizing:border-box; } [hidden] { display:none !important; }
       .app { height:100vh; display:flex; flex-direction:column; background:var(--surface); }
@@ -69,10 +71,12 @@
       .title { grid-area:title; display:flex; align-items:center; gap:6px; min-width:0; }
       .view-controls { grid-area:controls; display:flex; align-items:center; gap:8px; justify-self:center; }
       .actions { grid-area:actions; display:flex; align-items:center; gap:4px; justify-self:end; }
-      .zoom-controls { display:flex; align-items:center; border:1px solid var(--divider); border-radius:7px; padding:2px; }
-      .zoom-controls button { padding:0 6px; height:27px; min-width:27px; }
-      .zoom-controls .zoom-step { font-size:18px; line-height:1; }
-      .zoom-controls .zoom-reset { background:var(--panel); min-width:49px; font-variant-numeric:tabular-nums; }
+      .step-controls { display:flex; align-items:center; border:1px solid var(--divider); border-radius:7px; padding:2px; }
+      .step-controls button { padding:0 6px; height:27px; min-width:27px; }
+      .step-controls .step { font-size:18px; line-height:1; }
+      .step-controls .step-reset { background:var(--panel); }
+      .step-controls .zoom-reset { min-width:49px; font-variant-numeric:tabular-nums; }
+      .step-controls .font-size-reset { min-width:38px; padding:0 4px; font-variant-numeric:tabular-nums; white-space:nowrap; }
       .filename { field-sizing:content; min-width:4ch; max-width:28ch; padding:5px 7px; border:1px solid transparent; border-radius:5px; background:transparent; font:inherit; font-size:13px; color:var(--muted); }
       .draft-label { flex:none; border:1px solid var(--line); border-radius:3px; padding:2px 5px; color:var(--muted); font-size:11px; }
       .draft-sync { display:grid; place-items:center; width:20px; flex:none; color:var(--muted); }
@@ -82,19 +86,37 @@
       .filename:not(:focus) { text-overflow:ellipsis; }
       .filename:hover, .filename:focus { border-color:var(--line); }
       button { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:12px; border:0; border-radius:6px; padding:8px 12px; background:transparent; color:var(--muted); cursor:pointer; }
-      button:hover, .zoom-controls .zoom-reset:hover { background:var(--hover); color:var(--accent); }
+      button:hover, .step-controls .step-reset:hover { background:var(--hover); color:var(--accent); }
       button:disabled { opacity:.5; cursor:default; }
       button:focus-visible, .filename:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
       .icon-button { width:34px; height:34px; padding:7px; flex:none; }
+      .width-toggle[aria-pressed="true"] { background:var(--panel); color:var(--accent); }
+      .width-toggle:hover { background:var(--hover); }
       main { flex:1; min-height:0; overflow:auto; }
       .document { width:100%; max-width:840px; margin:0 auto; padding:64px 40px 100px; zoom:var(--document-zoom, 1); }
-      article { font-family:system-ui,-apple-system,sans-serif; font-size:17px; line-height:1.7; color:var(--text); overflow-wrap:anywhere; }
+      :host([data-wide]) { --print-content-width:257mm; --print-page-height:169.5mm; }
+      :host([data-wide]) .document { max-width:1200px; }
+      article { font-family:system-ui,-apple-system,sans-serif; font-size:var(--document-font-size, 17px); line-height:1.7; color:var(--text); overflow-wrap:anywhere; }
       article { min-height:50vh; } article > :first-child { margin-top:0; }
       h1,h2,h3,h4,h5,h6 { line-height:1.3; letter-spacing:-.025em; }
       h1 { font-size:2em; } h2 { font-size:1.5em; } a { color:var(--accent); }
       pre { overflow:auto; background:var(--panel); padding:16px; border-radius:6px; }
       code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.88em; background:var(--panel); border-radius:3px; padding:2px 4px; }
       pre code { padding:0; }
+      mark { background:var(--highlight); color:inherit; }
+      dt { font-weight:650; }
+      dd { margin:0 0 .8em 1.25em; }
+      dd > :first-child { margin-top:0; }
+      .footnotes { font-size:.9em; }
+      .footnotes p { margin:.35em 0; }
+      li.task-list-item { list-style:none; }
+      .md-read-task { accent-color:var(--accent); vertical-align:middle; margin:0 4px 0 0; }
+      .md-read-task:enabled { cursor:pointer; }
+      .hljs-keyword, .hljs-attr, .hljs-selector-tag, .hljs-meta { --code-token:var(--code-keyword); }
+      .hljs-string, .hljs-number, .hljs-literal, .hljs-regexp { --code-token:var(--code-literal); }
+      .hljs-comment, .hljs-quote { --code-token:var(--code-comment); }
+      .hljs-title, .hljs-built_in, .hljs-type { --code-token:var(--code-symbol, var(--accent)); }
+      :is(.hljs, .md-code-line) span { color:var(--code-token, inherit); }
       blockquote { margin-left:0; padding-left:18px; border-left:3px solid var(--quote-border); color:var(--muted); }
       table { border-collapse:collapse; width:100%; table-layout:fixed; }
       td,th { border:1px solid var(--line); padding:4px 10px; vertical-align:top; text-align:left; overflow-wrap:anywhere; }
@@ -110,21 +132,61 @@
       .save-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .document-info { display:grid; gap:3px; flex:none; align-content:start; text-align:right; }
       .editor { min-height:50vh; }
+      .print-layout {
+        position:fixed; inset:0 auto auto -10000px; visibility:hidden;
+        width:var(--print-content-width, 170mm); color-scheme:light; --line:#d9d9d0; --quote-border:#a2b8a4;
+      }
+      article.print-page { display:flex; flex-direction:column; min-height:var(--print-page-height, 256.5mm); font-size:calc(11pt * var(--print-font-scale, 1)); line-height:1.5; }
+      .print-page-body { display:flow-root; }
+      .print-page-body > :first-child { margin-top:0; }
+      .print-page-notes { margin-top:auto; padding-top:8pt; }
+      .print-page-notes ol { border-top:1px solid var(--line); margin:0; padding:5pt 0 0 20pt; }
+      .print-layout .footnote-return { display:none; }
+      .print-layout pre {
+        overflow:visible; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:4;
+        font-size:calc(10pt * var(--print-font-scale, 1)); line-height:1.4; padding:8pt; border:1px solid var(--line);
+      }
+      .print-layout pre code { font-size:inherit; }
+      @media screen {
+        article ::selection { background:var(--editor-selection); color:var(--text); }
+        :is(.footnote-reference, .footnote-item):focus { outline:2px solid var(--focus); outline-offset:3px; }
+        .document-scroll-area { display:flex; flex:1; min-height:0; position:relative; isolation:isolate; }
+        .document-scroll-area::after {
+          content:""; position:absolute; inset:auto 0 -1px; height:29px; z-index:1;
+          background:linear-gradient(to bottom, transparent, var(--surface) calc(100% - 6px));
+          pointer-events:none;
+        }
+      }
       @media(max-width:650px) {
         header { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"title actions" "controls controls"; gap:8px; padding:10px 16px; }
         .document { padding:32px 22px 64px; } footer { padding:9px 16px; } .hint { display:none; }
       }
       @media print {
+        .footnote-return { display:none; }
         :host { position:static !important; background:#fff !important; color:#000 !important; }
         .app { display:block; height:auto; background:#fff; }
+        .app:has(+ .print-layout) { display:none; }
+        .print-layout { position:static; visibility:visible; }
+        .print-layout article.print-page { display:flex !important; min-height:var(--print-page-height, 256.5mm); }
+        .print-page + .print-page { break-before:page; }
         header, footer, .editor { display:none !important; }
         main { overflow:visible; }
-        .document { width:auto; max-width:none; padding:0; margin:0; zoom:1; color-scheme:light; --line:#d9d9d0; --quote-border:#a2b8a4; }
-        article, article[hidden] { display:block !important; min-height:0; font-size:11pt; line-height:1.5; }
+        .document, :host([data-wide]) .document { width:auto; max-width:none; padding:0; margin:0; zoom:1; color-scheme:light; --line:#d9d9d0; --quote-border:#a2b8a4; }
+        article, article[hidden] { display:block !important; min-height:0; font-size:calc(11pt * var(--print-font-scale, 1)); line-height:1.5; }
         article, article * { color:#000 !important; background:transparent !important; }
+        article .hljs {
+          --code-keyword:#803a73; --code-literal:#8a4f17; --code-comment:#686e60; --code-symbol:#24684d;
+          print-color-adjust:exact;
+        }
+        article .hljs span { color:var(--code-token, #000) !important; }
+        article mark { background:#f3df8f !important; print-color-adjust:exact; }
         article a { text-decoration:underline; }
         h1,h2,h3,h4,h5,h6 { break-after:avoid; }
-        pre { overflow:visible; white-space:pre-wrap; padding:0; }
+        pre {
+          overflow:visible; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:4;
+          font-size:calc(10pt * var(--print-font-scale, 1)); line-height:1.4; padding:8pt; border:1px solid var(--line);
+        }
+        pre code { font-size:inherit; }
         table { break-inside:avoid; }
         article th { background:#eeede7 !important; print-color-adjust:exact; }
         thead { display:table-header-group; }
@@ -144,10 +206,20 @@
           <span class="draft-label" hidden>Draft</span>
         </div>
         <div class="view-controls">
-          <div class="zoom-controls" role="group" aria-label="Document zoom">
-            <button class="zoom-out zoom-step" type="button" aria-label="Zoom out" title="Zoom out">−</button>
-            <button class="zoom-reset" type="button" title="Reset zoom to 100%">100%</button>
-            <button class="zoom-in zoom-step" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+          <button class="width-toggle icon-button" type="button" aria-label="Wide document layout" aria-pressed="false" title="Switch to wide layout">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8m-6-2-2 2 2 2m4-4 2 2-2 2"/>
+            </svg>
+          </button>
+          <div class="step-controls" role="group" aria-label="Document font size">
+            <button class="font-size-down step" type="button" aria-label="Decrease font size" title="Decrease font size">−</button>
+            <button class="font-size-reset step-reset" type="button" aria-label="Print font size 11 points. Reset font size" title="Reset font size">11pt</button>
+            <button class="font-size-up step" type="button" aria-label="Increase font size" title="Increase font size">+</button>
+          </div>
+          <div class="zoom-controls step-controls" role="group" aria-label="Document zoom">
+            <button class="zoom-out step" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+            <button class="zoom-reset step-reset" type="button" title="Reset zoom to 100%">100%</button>
+            <button class="zoom-in step" type="button" aria-label="Zoom in" title="Zoom in">+</button>
           </div>
           <button class="theme-toggle icon-button" type="button">
             <svg class="moon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13.35A9 9 0 0 1 10.65 3.1 9 9 0 1 0 20.9 13.35Z"/></svg>
@@ -167,7 +239,9 @@
           </button>
         </div>
       </header>
-      <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
+      <div class="document-scroll-area">
+        <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
+      </div>
       <footer>
         <div class="save-info"><span role="status" aria-live="polite"></span><span class="save-location"></span></div>
         <div class="document-info">
@@ -178,7 +252,14 @@
     </div>`;
   const preview = root.querySelector('article'), editorMount = root.querySelector('.editor');
   const zoomOut = root.querySelector('.zoom-out'), zoomReset = root.querySelector('.zoom-reset'), zoomIn = root.querySelector('.zoom-in');
+  const fontSizeDown = root.querySelector('.font-size-down');
+  const fontSizeReset = root.querySelector('.font-size-reset');
+  const fontSizeUp = root.querySelector('.font-size-up');
+  const defaultFontSize = 11;
+  const minFontSize = 7.5, maxFontSize = 18;
+  let fontSize = defaultFontSize;
   const themeToggle = root.querySelector('.theme-toggle');
+  const widthToggle = root.querySelector('.width-toggle');
   const systemTheme = matchMedia('(prefers-color-scheme: dark)');
   const themeStorage = globalThis.chrome?.storage;
   let zoom = 100, themeOverride, themeChanged = false;
@@ -186,7 +267,7 @@
   const saveLocation = root.querySelector('.save-location');
   const wordCount = root.querySelector('.word-count');
   const wordSegmenter = new Intl.Segmenter(undefined, { granularity:'word' });
-  const wordBoundary = /^(?:BLOCKQUOTE|BR|DIV|H[1-6]|LI|P|PRE|TD|TH|TR)$/;
+  const wordBoundary = /^(?:BLOCKQUOTE|BR|DD|DIV|DT|H[1-6]|LI|P|PRE|TD|TH|TR)$/;
   const saveButton = root.querySelector('.save'), draftLabel = root.querySelector('.draft-label');
   const downloadButton = root.querySelector('.download');
   const sync = root.querySelector('.draft-sync');
@@ -199,6 +280,8 @@
 
   const embeddedImages = new Map();
   const embedPrefix = crypto.getRandomValues(new Uint32Array(4)).join('-');
+  const readTasks = new Map();
+  let bindTasksFrom;
   const markdownParser = new marked.Marked({
     gfm:true, breaks:true,
     extensions:[{
@@ -229,7 +312,80 @@
         return `<span data-md-embed="${id}"></span>`;
       }
     }]
+  }, MarkdownEditor.extendedMarkdown(embedPrefix), {
+    hooks:{
+      processAllTokens(tokens) {
+        prepareTasks(tokens, bindTasksFrom);
+        return tokens;
+      }
+    },
+    renderer:{
+      listitem(item) {
+        if (!item.task) return false;
+        const { taskId, checked, loose, tokens } = item;
+        const binding = taskId ? `data-md-task="${taskId}"` : 'disabled';
+        const input = `<input type="checkbox" class="md-read-task" aria-label="Toggle task" ${binding}${checked ? ' checked' : ''}>`;
+        const body = this.parser.parse(tokens, !!loose);
+        const content = loose && body.startsWith('<p>') ? `<p>${input} ${body.slice(3)}` : `${input} ${body}`;
+        return `<li class="task-list-item">${content}</li>\n`;
+      }
+    }
   });
+
+  function prepareTasks(tokens, source) {
+    const items = new Map();
+    markdownParser.walkTokens(tokens, item => {
+      if (item.type !== 'list_item') return;
+      const first = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+(\[[ xX]\](?=[ \t\n]|$)[^\n]*)/.exec(item.raw);
+      if (!first) return;
+      const marker = first[1].trimEnd();
+      if (!item.task) {
+        // Marked requires a literal space after the marker, even for an empty task.
+        const prefix = /^\[[ xX]\](?:[ \t]+|\n|$)/.exec(item.text);
+        const inline = item.tokens[0]?.tokens;
+        if (!prefix || !inline) return;
+        let remaining = prefix[0].length;
+        while (inline.length && remaining >= inline[0].raw.length) remaining -= inline.shift().raw.length;
+        if (remaining && inline[0]?.type === 'text') {
+          inline[0].raw = inline[0].raw.slice(remaining);
+          inline[0].text = inline[0].text.slice(remaining);
+        }
+        item.task = true;
+        item.checked = /x/i.test(marker[1]);
+      }
+      if (!items.has(marker)) items.set(marker, []);
+      items.get(marker).push(item);
+    });
+    if (source === undefined || !items.size) return;
+    const positions = new Map();
+    for (const position of MarkdownEditor.taskSourcePositions(source)) {
+      if (!positions.has(position.marker)) positions.set(position.marker, []);
+      positions.get(position.marker).push(position);
+    }
+    for (const [marker, tasks] of items) {
+      const matches = positions.get(marker);
+      // Leave ambiguous tasks disabled if the two parsers disagree about this source.
+      if (matches?.length !== tasks.length) continue;
+      tasks.forEach((item, index) => {
+        const id = `${embedPrefix}-task-${matches[index].from}`;
+        item.taskId = id;
+        readTasks.set(id, matches[index]);
+      });
+    }
+  }
+  function setFontSize(size) {
+    fontSize = Math.max(minFontSize, Math.min(maxFontSize, size));
+    const printScale = fontSize / defaultFontSize;
+    host.style.setProperty('--document-font-size', `${17 * printScale}px`);
+    host.style.setProperty('--print-font-scale', printScale);
+    fontSizeReset.textContent = `${fontSize}pt`;
+    const label = `Print font size ${fontSize} points. Reset to ${defaultFontSize} points`;
+    fontSizeReset.title = label;
+    fontSizeReset.setAttribute('aria-label', label);
+    fontSizeDown.disabled = fontSize === minFontSize;
+    fontSizeUp.disabled = fontSize === maxFontSize;
+    if (editing) richEditor?.requestMeasure();
+  }
   function setZoom(percent) {
     zoom = Math.max(50, Math.min(200, percent));
     host.style.setProperty('--document-zoom', zoom / 100);
@@ -255,6 +411,17 @@
   setZoom(100);
   applyTheme();
   systemTheme.addEventListener('change', applyTheme);
+  widthToggle.addEventListener('click', () => {
+    const wide = widthToggle.getAttribute('aria-pressed') === 'false';
+    widthToggle.setAttribute('aria-pressed', String(wide));
+    widthToggle.title = wide ? 'Switch to standard width' : 'Switch to wide layout';
+    host.toggleAttribute('data-wide', wide);
+    setPrintOrientation(wide);
+    if (editing) richEditor?.requestMeasure();
+  });
+  fontSizeDown.addEventListener('click', () => setFontSize(fontSize - 0.5));
+  fontSizeReset.addEventListener('click', () => setFontSize(defaultFontSize));
+  fontSizeUp.addEventListener('click', () => setFontSize(fontSize + 0.5));
   zoomOut.addEventListener('click', () => setZoom(zoom - 10));
   zoomReset.addEventListener('click', () => setZoom(100));
   zoomIn.addEventListener('click', () => setZoom(zoom + 10));
@@ -289,7 +456,11 @@
         const label = document.createElement('span'); label.textContent = `[Image: ${img.alt || src}]`; img.replaceWith(label);
       }
     });
-    fragment.querySelectorAll('a').forEach(link => { link.target = '_blank'; link.rel = 'noopener noreferrer'; });
+    fragment.querySelectorAll('a').forEach(link => {
+      if (link.getAttribute('href')?.startsWith('#')) return;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    });
     return fragment;
   }
   function pendingFilename() {
@@ -382,9 +553,16 @@
     if (!preview.contains(selected.endContainer)) selected.setEnd(preview, preview.childNodes.length);
     setSelectedWords(countWords(selected.cloneContents()));
   }
-  function renderMarkdown(source, baseUrl, inline = false) {
+  function renderMarkdown(source, baseUrl, inline = false, bindTasks = false) {
     embeddedImages.clear();
-    const fragment = sanitize(inline ? markdownParser.parseInline(source) : markdownParser.parse(source));
+    let html;
+    bindTasksFrom = bindTasks ? source : undefined;
+    try {
+      html = inline ? markdownParser.parseInline(source) : markdownParser.parse(source);
+    } finally {
+      bindTasksFrom = undefined;
+    }
+    const fragment = sanitize(html);
     for (const placeholder of fragment.querySelectorAll('[data-md-embed]')) {
       const target = embeddedImages.get(placeholder.dataset.mdEmbed);
       if (target) placeholder.replaceWith(MarkdownEditor.createInlineImage(target, baseUrl));
@@ -396,7 +574,8 @@
     clearTimeout(renderTimer);
     const baseUrl = getImageBaseUrl();
     if (renderedMarkdown === markdown && renderedImageBaseUrl === baseUrl) return;
-    preview.replaceChildren(renderMarkdown(markdown, baseUrl));
+    readTasks.clear();
+    preview.replaceChildren(renderMarkdown(markdown, baseUrl, false, true));
     totalWords = countWords(preview);
     updateWordCount();
     renderedMarkdown = markdown;
@@ -406,10 +585,27 @@
     render();
     window.print();
   }
+  let printLayout;
+  function documentAnchor(href) {
+    if (!href.startsWith('#')) return null;
+    let id;
+    try { id = decodeURIComponent(href.slice(1)); } catch { return null; }
+    const anchor = root.getElementById(id);
+    return preview.contains(anchor) ? anchor : null;
+  }
   function openLink(source) {
     const fragment = sanitize(marked.parseInline(source, { gfm:true }));
     const href = fragment.querySelector('a[href]')?.getAttribute('href');
     if (!href) return;
+    if (href.startsWith('#')) {
+      render();
+      const anchor = documentAnchor(href);
+      if (anchor) {
+        setEditing(false);
+        anchor.scrollIntoView();
+      }
+      return;
+    }
     let url;
     try { url = new URL(href, document.baseURI); } catch { return; }
     if (['http:', 'https:', 'file:'].includes(url.protocol)) window.open(url.href, '_blank', 'noopener,noreferrer');
@@ -617,12 +813,44 @@
     // Chromium can reject Trusted Types callbacks while dispatching this event.
     document.documentElement.style.setProperty('overflow', 'visible', 'important');
     document.title = pendingFilename();
+    printLayout?.remove();
+    printLayout = MarkdownEditor.paginateFootnotes(preview, root);
   });
   window.addEventListener('afterprint', () => {
+    printLayout?.remove();
+    printLayout = null;
     document.documentElement.style.setProperty('overflow', 'hidden', 'important');
     updateStatus();
   });
   modeButton.addEventListener('click', () => setEditing(!editing));
+  preview.addEventListener('click', event => {
+    const href = event.target.closest('a[href^="#"]')?.getAttribute('href');
+    if (!href) return;
+    event.preventDefault();
+    const anchor = documentAnchor(href);
+    if (!anchor) return;
+    if (anchor.matches('.footnote-reference, .footnote-item')) {
+      anchor.focus({ preventScroll:true });
+      anchor.scrollIntoView({ block:'center' });
+    } else {
+      anchor.scrollIntoView();
+    }
+  });
+  preview.addEventListener('change', event => {
+    const checkbox = event.target;
+    const id = checkbox.dataset.mdTask;
+    const task = readTasks.get(id);
+    if (!task || renderedMarkdown !== markdown) return;
+    if (richEditor) {
+      richEditor.setTaskChecked(task.from, checkbox.checked);
+    } else {
+      const from = task.sourceFrom + 1;
+      markdown = markdown.slice(0, from) + (checkbox.checked ? 'x' : ' ') + markdown.slice(from + 1);
+      documentChanged();
+    }
+    render();
+    preview.querySelector(`[data-md-task="${id}"]`)?.focus({ preventScroll:true });
+  });
   document.addEventListener('selectionchange', countReadingSelection);
   window.addEventListener('keydown', event => {
     if (event.isComposing) return;
@@ -647,9 +875,14 @@
   document.documentElement.style.cssText = 'margin:0!important;padding:0!important;overflow:hidden!important;';
   document.body.replaceChildren(host); document.body.style.cssText = 'margin:0!important;padding:0!important;';
   const printStyle = document.createElement('style');
-  printStyle.textContent = '@page { size:A4; margin:20mm; } @media print { html, body { height:auto!important; background:#fff!important; } }';
+  function setPrintOrientation(wide) {
+    printStyle.textContent = `@page { size:A4 ${wide ? 'landscape' : 'portrait'}; margin:20mm; }
+      @media print { html, body { height:auto!important; background:#fff!important; } }`;
+  }
+  setPrintOrientation(false);
   document.head.append(printStyle);
   render();
+  if (location.hash) documentAnchor(location.hash)?.scrollIntoView();
   updateStatus();
   if (storageAvailable) setInterval(saveDraft, 30000);
   if (isExtensionDocument) {

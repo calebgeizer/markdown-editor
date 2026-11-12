@@ -9,8 +9,11 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { createInlineImage, matchInlineImage } from './inline-image.js';
+import { codeHighlightRanges, headingIdPattern, highlightPattern, shortcodeEmoji } from './extended-markdown.js';
 
 export { createInlineImage, localFileUrl, matchInlineImage } from './inline-image.js';
+export { extendedMarkdown } from './extended-markdown.js';
+export { paginateFootnotes } from './print-layout.js';
 
 export const pageBreakStart = /^ {0,3}(?:\\newpage|\{\{<[ \t]*pagebreak[ \t]*>\}\})[ \t]*(?:\n|$)/;
 export const pageBreakLine = /^ {0,3}(?:\\newpage|\{\{<[ \t]*pagebreak[ \t]*>\}\})[ \t]*$/m;
@@ -44,6 +47,94 @@ const inlineImageSyntax = {
   }]
 };
 
+const bareTaskSyntax = {
+  parseBlock:[{
+    name:'BareTask',
+    after:'TaskList',
+    leaf(context, leaf) {
+      if (!/^\[[ xX]\]$/.test(leaf.content) || context.parentType().name !== 'ListItem') return null;
+      return {
+        nextLine() { return false; },
+        finish(context, leaf) {
+          const marker = context.elt('TaskMarker', leaf.start, leaf.start + 3);
+          context.addLeafElement(leaf, context.elt('Task', leaf.start, leaf.start + leaf.content.length, [marker]));
+          return true;
+        }
+      };
+    }
+  }]
+};
+
+const highlightSyntax = {
+  defineNodes:['Highlight', 'HighlightMark'],
+  parseInline:[{
+    name:'Highlight',
+    parse(context, next, from) {
+      if (next !== 61 || context.char(from + 1) !== 61) return -1;
+      const match = highlightPattern.exec(context.slice(from, context.end));
+      if (!match) return -1;
+      const to = from + match[0].length;
+      return context.addElement(context.elt('Highlight', from, to, [
+        context.elt('HighlightMark', from, from + 2),
+        ...context.parser.parseInline(match[1], from + 2),
+        context.elt('HighlightMark', to - 2, to)
+      ]));
+    }
+  }]
+};
+
+const markdownExtensions = [inlineImageSyntax, pageBreakSyntax, bareTaskSyntax, highlightSyntax];
+const taskParser = markdownLanguage.parser.configure(markdownExtensions);
+
+function taskBullet(marker) {
+  const bullet = marker.parent?.prevSibling;
+  return bullet?.name === 'ListMark' ? bullet : null;
+}
+
+export function taskSourcePositions(source) {
+  const normalized = source.replace(/\r\n?/g, '\n');
+  const crlf = source.matchAll(/\r\n/g);
+  let nextBreak = crlf.next(), extra = 0;
+  const positions = [];
+  taskParser.parse(normalized).iterate({
+    enter(node) {
+      if (node.name !== 'TaskMarker' || !taskBullet(node.node)) return;
+      while (!nextBreak.done && nextBreak.value.index < node.from + extra) {
+        extra++;
+        nextBreak = crlf.next();
+      }
+      const end = normalized.indexOf('\n', node.from);
+      positions.push({
+        from:node.from,
+        sourceFrom:node.from + extra,
+        marker:normalized.slice(node.from, end < 0 ? undefined : end).trimEnd()
+      });
+    }
+  });
+  return positions;
+}
+
+const normalizeTaskShorthand = EditorState.transactionFilter.of(transaction => {
+  if (!transaction.docChanged) return transaction;
+  const doc = transaction.newDoc;
+  let tree;
+  const changes = new Map();
+  transaction.changes.iterChangedRanges((_from, _to, start, end) => {
+    const lastLine = doc.lineAt(end).number;
+    for (let number = doc.lineAt(start).number; number <= lastLine; number++) {
+      const line = doc.line(number);
+      const match = /^([ \t]*(?:>[ \t]*)*[-+*])([ \t]*)\[\](?=[ \t]|$)/.exec(line.text);
+      if (!match) continue;
+      const from = line.from + match[1].length;
+      tree ??= taskParser.parse(doc.toString());
+      let node = tree.resolveInner(from, 1);
+      while (node && !/^(?:FencedCode|CodeBlock|HTMLBlock)$/.test(node.name)) node = node.parent;
+      if (!node) changes.set(from, { from, to:line.from + match[0].length, insert:' [ ]' });
+    }
+  });
+  return changes.size ? [transaction, { changes:[...changes.values()], sequential:true }] : transaction;
+});
+
 class Bullet extends WidgetType {
   toDOM() {
     const span = document.createElement('span');
@@ -72,11 +163,23 @@ class Task extends WidgetType {
     input.checked = this.checked;
     input.className = 'md-task';
     input.setAttribute('aria-label', 'Toggle task');
+    input.addEventListener('mousedown', event => event.preventDefault());
     input.addEventListener('change', () => {
-      view.dispatch({ changes:{ from:this.from, to:this.from + 3, insert:input.checked ? '[x]' : '[ ]' } });
+      view.dispatch({ changes:{ from:this.from + 1, to:this.from + 2, insert:input.checked ? 'x' : ' ' } });
     });
     return input;
   }
+}
+
+class EmojiPreview extends WidgetType {
+  constructor(emoji) { super(); this.emoji = emoji; }
+  eq(other) { return this.emoji === other.emoji; }
+  toDOM() {
+    const span = document.createElement('span');
+    span.textContent = this.emoji;
+    return span;
+  }
+  ignoreEvent(event) { return event.type !== 'mousedown'; }
 }
 
 class InlineImage extends WidgetType {
@@ -264,7 +367,7 @@ function tableMouseSelection(view, event) {
   };
 }
 
-function decorations(view, imageBaseUrl, renderCell) {
+function decorations(view, imageBaseUrl, renderCell, codeHighlights) {
   const { state } = view;
   const ranges = [], lines = new Map();
   const selectedLines = state.selection.ranges.map(range => ({
@@ -274,6 +377,8 @@ function decorations(view, imageBaseUrl, renderCell) {
   // Keep completed syntax visible while the caret is directly after its closing marker.
   const revealInlineSource = (from, to) => state.selection.ranges.some(range =>
     range.empty ? range.head > from && range.head <= to : range.from < to && range.to > from);
+  const revealTaskSource = (from, to) => state.selection.ranges.some(range =>
+    range.empty ? range.head >= from && range.head < to : range.from < to && range.to > from);
   const lineClass = (position, name) => {
     const from = state.doc.lineAt(position).from;
     if (!lines.has(from)) lines.set(from, new Set());
@@ -316,7 +421,14 @@ function decorations(view, imageBaseUrl, renderCell) {
         return false;
       }
       const heading = /^(?:ATX|Setext)Heading([1-6])$/.exec(name);
-      if (heading) lineClass(from, `md-h${heading[1]}`);
+      if (heading) {
+        lineClass(from, `md-h${heading[1]}`);
+        const lineEnd = state.doc.lineAt(from).to;
+        const end = node.lastChild?.name === 'HeaderMark' && node.lastChild.from > from ? node.lastChild.from : lineEnd;
+        const text = state.sliceDoc(from, end).trimEnd();
+        const id = headingIdPattern.exec(text);
+        if (id) hide(from + id.index, from + text.length);
+      }
       if (name === 'HeaderMark') {
         // Consume the separating space too, so hidden heading markers do not indent text.
         let end = to;
@@ -334,8 +446,26 @@ function decorations(view, imageBaseUrl, renderCell) {
           : inlineLink?.reveal;
         hide(from, to, undefined, reveal);
       }
-      if (name === 'ListMark' && !/^\d/.test(state.sliceDoc(from, to))) hide(from, to, new Bullet());
-      if (name === 'TaskMarker') hide(from, to, new Task(from, /x/i.test(state.sliceDoc(from, to))));
+      if (name === 'Highlight' || name === 'Subscript' || name === 'Superscript') {
+        mark(from, to, `md-${name.toLowerCase()}`);
+      }
+      if (/^(?:Highlight|Subscript|Superscript)Mark$/.test(name)) {
+        hide(from, to, undefined, revealInlineSource(node.parent.from, node.parent.to));
+      }
+      if (name === 'Emoji') {
+        const emoji = shortcodeEmoji(state.sliceDoc(from, to));
+        if (emoji) hide(from, to, new EmojiPreview(emoji), revealInlineSource(from, to));
+      }
+      if (name === 'ListMark') {
+        const task = node.nextSibling?.getChild('TaskMarker');
+        if (task) {
+          hide(from, task.from, undefined, revealTaskSource(from, task.to));
+        } else if (!/^\d/.test(state.sliceDoc(from, to))) hide(from, to, new Bullet());
+      }
+      if (name === 'TaskMarker') {
+        const bullet = taskBullet(node);
+        if (bullet) hide(from, to, new Task(from, /x/i.test(state.sliceDoc(from, to))), revealTaskSource(bullet.from, to));
+      }
       if (name === 'QuoteMark') { lineClass(from, 'md-quote'); hide(from, to); }
       if (name === 'InlineImage') {
         const { target } = matchInlineImage(state.sliceDoc(from, to));
@@ -369,10 +499,43 @@ function decorations(view, imageBaseUrl, renderCell) {
         // Children are handled here so link markers are never replaced twice.
         return false;
       }
+      if (name === 'Autolink' || (name === 'URL' && node.parent?.name !== 'Link' && node.parent?.name !== 'Image')) {
+        mark(from, to, 'md-link', {
+          'data-md-link':state.sliceDoc(from, to),
+          title:'⌘-click to open link'
+        });
+        return false;
+      }
       if (name === 'FencedCode' || name === 'CodeBlock') {
         const first = state.doc.lineAt(Math.max(from, visible.from));
         const last = state.doc.lineAt(Math.min(to, visible.to));
         for (let number = first.number; number <= last.number; number++) lineClass(state.doc.line(number).from, 'md-code-line');
+        const info = node.getChild('CodeInfo');
+        if (info) {
+          if (!codeHighlights.has(from)) {
+            const parts = node.getChildren('CodeText');
+            const source = parts.map(part => state.doc.sliceString(part.from, part.to)).join('');
+            const tokens = codeHighlightRanges(source, state.sliceDoc(info.from, info.to));
+            const highlights = [];
+            let offset = 0;
+            for (const part of parts) {
+              const end = offset + part.to - part.from;
+              for (const token of tokens) {
+                if (token.from >= end || token.to <= offset) continue;
+                highlights.push({
+                  from:part.from + Math.max(token.from - offset, 0),
+                  to:part.from + Math.min(token.to, end) - offset,
+                  className:token.className
+                });
+              }
+              offset = end;
+            }
+            codeHighlights.set(from, highlights);
+          }
+          for (const range of codeHighlights.get(from)) {
+            mark(Math.max(range.from, visible.from), Math.min(range.to, visible.to), range.className);
+          }
+        }
       }
       if (name === 'CodeInfo') hide(from, to);
       if (name === 'HorizontalRule') lineClass(from, 'md-rule');
@@ -390,14 +553,17 @@ function livePreview(getImageBaseUrl, renderCell) {
   return ViewPlugin.fromClass(class {
     constructor(view) {
       this.imageBaseUrl = getImageBaseUrl();
-      this.decorations = decorations(view, this.imageBaseUrl, renderCell);
+      this.codeHighlights = new Map();
+      this.decorations = decorations(view, this.imageBaseUrl, renderCell, this.codeHighlights);
     }
     update(update) {
       const baseUrl = getImageBaseUrl();
+      const treeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
+      if (update.docChanged || treeChanged) this.codeHighlights.clear();
       if (baseUrl !== this.imageBaseUrl || update.docChanged || update.selectionSet || update.viewportChanged ||
-          syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          treeChanged) {
         this.imageBaseUrl = baseUrl;
-        this.decorations = decorations(update.view, baseUrl, renderCell);
+        this.decorations = decorations(update.view, baseUrl, renderCell, this.codeHighlights);
       }
     }
   }, { decorations:plugin => plugin.decorations });
@@ -429,7 +595,7 @@ function toggleInline(delimiter, nodeName) {
 }
 
 const theme = EditorView.theme({
-  '&':{ backgroundColor:'transparent', color:'var(--text)', fontSize:'17px' },
+  '&':{ backgroundColor:'transparent', color:'var(--text)', fontSize:'var(--document-font-size, 17px)' },
   '&.cm-focused':{ outline:'none' },
   '.cm-scroller':{ fontFamily:'system-ui,-apple-system,sans-serif', lineHeight:'1.7', overflow:'visible' },
   '.cm-content':{ padding:'0', minHeight:'50vh', caretColor:'var(--accent)' },
@@ -439,9 +605,16 @@ const theme = EditorView.theme({
   '.md-h3':{ fontSize:'1.2em', fontWeight:'650', minHeight:'1.5em' },
   '.md-h4, .md-h5, .md-h6':{ fontWeight:'650' },
   '.md-bold':{ fontWeight:'700' }, '.md-italic':{ fontStyle:'italic' }, '.md-strike':{ textDecoration:'line-through' },
+  '.md-highlight':{ backgroundColor:'var(--highlight)' },
+  '.md-subscript':{ verticalAlign:'sub', fontSize:'.75em' },
+  '.md-superscript':{ verticalAlign:'super', fontSize:'.75em' },
   '.md-syntax':{ color:'var(--syntax)', fontWeight:'400', textDecoration:'none' },
   '.md-inline-code':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.9em', backgroundColor:'var(--panel)', borderRadius:'3px' },
-  '.md-code-line':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.88em', backgroundColor:'var(--panel)', padding:'0 12px' },
+  '.md-code-line':{
+    fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.88em', padding:'0 12px',
+    // Let the selection layer under the line show through.
+    backgroundColor:'color-mix(in srgb, var(--panel) 35%, transparent)'
+  },
   '.md-quote':{ borderLeft:'3px solid var(--quote-border)', paddingLeft:'14px', color:'var(--muted)' },
   '.md-link':{ color:'var(--accent)', textDecoration:'underline', textUnderlineOffset:'3px' },
   '.md-image':{ color:'var(--subtle)' }, '.md-bullet':{ color:'var(--subtle)' },
@@ -497,7 +670,7 @@ export function createEditor(parent, source, onChange, openLink, getImageBaseUrl
     // The supplied ShadowRoot keeps selection and style handling inside the extension.
     root:parent.getRootNode(),
     state:EditorState.create({ doc:source, extensions:[
-      markdown({ base:markdownLanguage, extensions:[inlineImageSyntax, pageBreakSyntax] }), history(), drawSelection(),
+      markdown({ base:markdownLanguage, extensions:markdownExtensions }), normalizeTaskShorthand, history(), drawSelection(),
       EditorView.lineWrapping, livePreview(getImageBaseUrl, renderCell), extendTableAlignment, theme,
       syntaxHighlighting(HighlightStyle.define([{ tag:tags.processingInstruction, color:'var(--syntax)' }])),
       EditorView.contentAttributes.of({ 'aria-label':'Markdown live preview', spellcheck:'true' }),
@@ -537,6 +710,9 @@ export function createEditor(parent, source, onChange, openLink, getImageBaseUrl
     blur:() => view.contentDOM.blur(),
     requestMeasure:() => view.requestMeasure(),
     refreshImages:() => view.dispatch({}),
+    setTaskChecked:(from, checked) => {
+      view.dispatch({ changes:{ from:from + 1, to:from + 2, insert:checked ? 'x' : ' ' } });
+    },
     selectedMarkdown:() => selectedMarkdown(view.state)
   };
 }
