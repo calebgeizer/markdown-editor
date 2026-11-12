@@ -8,3 +8,4 @@ Open a markdown file or click the chrome extension icon to get started!
 - View recently opened files
 - Live Preview editor
 - Print Button with PDF Export
+- Offline Support
