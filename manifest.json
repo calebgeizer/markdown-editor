@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Offline Markdown Editor",
+  "name": "markdown-editor",
   "version": "2.0.0",
   "description": "View and edit .md URLs offline. Save edits as a downloaded Markdown file.",
   "incognito": "split",
   "action": {
-    "default_title": "Offline Markdown Editor",
+    "default_title": "markdown-editor",
     "default_popup": "popup.html"
   },
   "background": {

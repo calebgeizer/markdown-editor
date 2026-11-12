@@ -1,0 +1,19 @@
+{
+  "name": "markdown-editor",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild editor.js --bundle --format=iife --global-name=MarkdownEditor --outfile=vendor/markdown-editor.js --minify --legal-comments=eof",
+    "test": "node tests/live-preview.cjs"
+  },
+  "devDependencies": {
+    "@codemirror/view": "6.43.15",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@lezer/highlight": "1.2.5",
+    "esbuild": "0.28.2",
+    "playwright": "1.65.0"
+  }
+}
