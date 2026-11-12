@@ -271,18 +271,21 @@
     if (!preview.contains(selected.endContainer)) selected.setEnd(preview, preview.childNodes.length);
     setSelectedWords(countWords(selected.cloneContents()));
   }
-  function render() {
-    clearTimeout(renderTimer);
-    const baseUrl = getImageBaseUrl();
-    if (renderedMarkdown === markdown && renderedImageBaseUrl === baseUrl) return;
+  function renderMarkdown(source, baseUrl, inline = false) {
     embeddedImages.clear();
-    const fragment = sanitize(markdownParser.parse(markdown));
+    const fragment = sanitize(inline ? markdownParser.parseInline(source) : markdownParser.parse(source));
     for (const placeholder of fragment.querySelectorAll('[data-md-embed]')) {
       const target = embeddedImages.get(placeholder.dataset.mdEmbed);
       if (target) placeholder.replaceWith(MarkdownEditor.createInlineImage(target, baseUrl));
     }
     embeddedImages.clear();
-    preview.replaceChildren(fragment);
+    return fragment;
+  }
+  function render() {
+    clearTimeout(renderTimer);
+    const baseUrl = getImageBaseUrl();
+    if (renderedMarkdown === markdown && renderedImageBaseUrl === baseUrl) return;
+    preview.replaceChildren(renderMarkdown(markdown, baseUrl));
     totalWords = countWords(preview);
     updateWordCount();
     renderedMarkdown = markdown;
@@ -313,7 +316,7 @@
           clearTimeout(renderTimer);
           renderTimer = setTimeout(render, 150);
           documentChanged();
-        }, openLink, getImageBaseUrl, countSelectedMarkdown);
+        }, openLink, getImageBaseUrl, countSelectedMarkdown, (cell, baseUrl) => renderMarkdown(cell, baseUrl, true));
       }
       richEditor.focus();
       richEditor.requestMeasure();
