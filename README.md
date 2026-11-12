@@ -31,3 +31,4 @@ The extension comes with its browser bundle in `vendor/`. You can install it in 
 
 ## Help
 - Head to [Markdown Guide](https://www.markdownguide.org/) to learn how to write in markdown.
+- Set Chrome as your default app for markdown files to open files automatically. ([Mac](https://www.atf.gov/media/14751/download), [PC](https://support.microsoft.com/en-us/windows/apps/change-default-apps-in-windows))
