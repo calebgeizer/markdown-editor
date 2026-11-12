@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Offline Markdown Editor</title>
+  <style>
+    body { width:250px; max-height:440px; overflow-y:auto; margin:0; padding:6px; background:#faf9f6; color:#30342e; font:13px system-ui,sans-serif; }
+    button { width:100%; padding:8px 10px; border:0; border-radius:5px; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    button:hover { background:#eae9e1; color:#24684d; }
+    button:focus-visible { outline:2px solid #83bca5; outline-offset:-2px; }
+    section { margin-top:5px; border-top:1px solid #e5e4dc; }
+    h2 { margin:9px 10px 3px; font-size:12px; font-weight:600; }
+    ul { list-style:none; margin:0; padding:0; }
+    li { display:flex; align-items:center; gap:2px; }
+    li button:first-child { flex:1; min-width:0; }
+    .trash { display:grid; place-items:center; width:30px; height:30px; padding:6px; flex:none; color:#66695f; }
+    .trash:hover { color:#9d3834; }
+    .trash:disabled { opacity:.5; cursor:default; }
+    p { margin:6px 10px; }
+    .empty { color:#66695f; }
+  </style>
+  <script defer src="storage-client.js"></script>
+  <script defer src="popup.js"></script>
+</head>
+<body>
+  <button id="new-file" type="button" autofocus>New File</button>
+  <section aria-labelledby="drafts-heading">
+    <h2 id="drafts-heading">Drafts</h2>
+    <ul id="drafts"></ul>
+    <p class="empty" id="drafts-empty" hidden>No drafts yet</p>
+  </section>
+  <section aria-labelledby="recent-heading">
+    <h2 id="recent-heading">Recently Opened</h2>
+    <ul id="recent"></ul>
+    <p class="empty" id="recent-empty" hidden>No recently opened files</p>
+  </section>
+  <p role="status" hidden></p>
+</body>
+</html>
