@@ -55,7 +55,7 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
     'the sync icon must sit between the filename and Draft badge');
   for (let attempt=0;attempt<2;attempt++) {
     await title.fill('notes');await title.press('Tab');
-    assert.equal(await title.inputValue(),'notes.md');
+    assert.equal(await title.inputValue(),'notes');
     assert.equal(await editor.evaluate(element=>element.getRootNode().activeElement===element),true,
       'Tab from the title must focus the editor in either mode');
   }
@@ -172,9 +172,11 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.evaluate(() => {
     const sanitize=DOMPurify.sanitize;
     window.printedHeadings=[];
+    window.printedTitles=[];
     window.print=()=>{
       const preview=document.querySelector('body > div').shadowRoot.querySelector('article');
       window.printedHeadings.push(preview.querySelector('h1')?.textContent);
+      window.printedTitles.push(document.title);
       DOMPurify.sanitize=()=>{ throw new Error('Trusted Types callback unavailable during beforeprint'); };
       window.dispatchEvent(new Event('beforeprint'));
       DOMPurify.sanitize=sanitize;
@@ -186,6 +188,8 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.keyboard.press('ControlOrMeta+p');
   assert.deepEqual(await page.evaluate(()=>window.printedHeadings),['New heading','Latest heading'],
     'the current preview must be rendered before the print dialog starts');
+  assert.deepEqual(await page.evaluate(()=>window.printedTitles),['notes','notes'],
+    'the print dialog must receive the title without the Markdown extension');
   await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.insertText('# Browser menu heading');
   await page.waitForFunction(()=>document.querySelector('body > div').shadowRoot.querySelector('article h1')?.textContent==='Browser menu heading');
   await page.setViewportSize({width:390,height:844});assert.ok(await page.locator('.document').evaluate(e=>e.getBoundingClientRect().width<=390));
@@ -317,6 +321,29 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.keyboard.press('End');await page.keyboard.type('|');
   await page.keyboard.press('ArrowLeft');await page.keyboard.type('Three');
   assert.equal(await download(),'|One|Two|Three|\n|---|---:|---|\n|1|2|\n\nAfter','typing a new empty column must extend a compact separator once');
+  await editor.press('ControlOrMeta+a');
+  await page.keyboard.insertText('| Name');
+  await editor.press('Tab');
+  await editor.press('Delete');
+  assert.equal((await download()).trimEnd(),'| Name |','Delete after Tab must remove the empty draft column');
+  await editor.press('Tab');
+  await page.keyboard.insertText('Value');
+  await editor.press('Tab');
+  await page.keyboard.insertText('Units');
+  await editor.press('Enter');
+  await page.keyboard.insertText('First');
+  assert.equal((await download()).trimEnd(),'| Name | Value | Units |\n| --- | --- | --- |\n| First |  |  |');
+  await editor.press('ControlOrMeta+a');
+  await page.keyboard.insertText('Name | Value\n:--- ---:\n| First | \`a\\|b\`\n\nAfter');
+  assert.equal((await download()).trimEnd(),'| Name | Value |\n| :--- | ---: |\n| First | \`a\\|b\` |\n\nAfter');
+  await page.locator('.md-table-row').filter({hasText:'First'}).click();
+  await editor.press('End');
+  await editor.press('Tab');
+  await editor.press('Backspace');
+  assert.equal((await download()).trimEnd(),'| Name | Value |\n| :--- | ---: |\n| First | \`a\\|b\` |\n\nAfter');
+  await editor.press('Tab');
+  await page.keyboard.insertText('Extra');
+  assert.equal((await download()).trimEnd(),'| Name | Value |  |\n| :--- | ---: | --- |\n| First | \`a\\|b\` | Extra |\n\nAfter');
   await editor.click();await page.keyboard.press('ControlOrMeta+a');
   await page.keyboard.insertText('First line\nSecond line\n\\newpage\nNext page\n{{< pagebreak >}}\nLast page\n\n```\n\\newpage\n```');
   assert.equal(await editor.locator('.md-page-break').count(),2,'both standalone page markers must preview outside code');

@@ -1,4 +1,4 @@
-import { EditorState, EditorSelection } from '@codemirror/state';
+import { EditorState, EditorSelection, Prec } from '@codemirror/state';
 import { EditorView, Decoration, ViewPlugin, WidgetType, keymap, drawSelection } from '@codemirror/view';
 import {
   cursorGroupLeft, cursorGroupRight, cursorLineUp, cursorLineDown,
@@ -210,7 +210,7 @@ function tableAlignments(state, table) {
   });
 }
 
-function tableCellRanges(source) {
+function tablePipes(source) {
   const pipes = [];
   let escaped = false;
   for (let index = 0; index < source.length; index++) {
@@ -218,6 +218,11 @@ function tableCellRanges(source) {
     if (char === '|' && !escaped) pipes.push(index);
     escaped = char === '\\' && !escaped;
   }
+  return pipes;
+}
+
+function tableCellRanges(source) {
+  const pipes = tablePipes(source);
   let from = 0, to = source.length;
   if (pipes.length && !source.slice(0, pipes[0]).trim()) from = pipes.shift() + 1;
   if (pipes.length && !source.slice(pipes.at(-1) + 1).trim()) to = pipes.pop();
@@ -226,6 +231,204 @@ function tableCellRanges(source) {
     from = end + 1;
     return range;
   });
+}
+
+function rowCells(source) {
+  return tableCellRanges(source).map(({ from, to }) => source.slice(from, to).trim());
+}
+
+function formatTableRow(cells) {
+  return `| ${cells.join(' | ')} |`;
+}
+
+function separatorCells(source) {
+  if (/^(?: {4}| {0,3}\t)/.test(source)) return null;
+  const cells = rowCells(source);
+  const markers = cells.flatMap(cell => cell.split(/[ \t]+/));
+  return markers.every(marker => /^:?-+:?$/.test(marker)) ? markers : null;
+}
+
+function isTableRow(source) {
+  return !/^(?: {4}| {0,3}(?:\t|>|#{1,6}[ \t]|[-+*][ \t]|\d{1,9}[.)][ \t]))/.test(source) &&
+    tablePipes(source).length > 0;
+}
+
+function isLiteralBlock(tree, line) {
+  const position = line.from + line.text.length - line.text.trimStart().length;
+  let node = tree.resolveInner(position, 1);
+  while (node) {
+    if (/^(?:FencedCode|CodeBlock|HTMLBlock)$/.test(node.name)) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
+function findTableDivider(doc, number) {
+  const first = Math.min(number + 1, doc.lines);
+  for (let current = first; current > 1; current--) {
+    const line = doc.line(current);
+    const header = doc.line(current - 1);
+    if (isTableRow(header.text) && !separatorCells(header.text) && separatorCells(line.text)) return line;
+    if (current <= number && !isTableRow(line.text)) break;
+  }
+  return null;
+}
+
+const repairTableSyntax = EditorState.transactionFilter.of(transaction => {
+  if (transaction.isUserEvent('undo') || transaction.isUserEvent('redo')) return transaction;
+  const { startState, newDoc, newSelection, changes } = transaction;
+  const lines = new Set();
+  if (transaction.docChanged && transaction.isUserEvent('input')) {
+    changes.iterChangedRanges((_from, _to, from, to) => {
+      const first = newDoc.lineAt(from).number, last = newDoc.lineAt(to).number;
+      if (first === last && !transaction.isUserEvent('input.paste')) return;
+      for (let n = first; n <= last; n++) lines.add(n);
+    });
+  }
+  if (!lines.size && transaction.selection) {
+    const oldLine = newDoc.lineAt(changes.mapPos(startState.selection.main.head));
+    if (oldLine.number !== newDoc.lineAt(newSelection.main.head).number) lines.add(oldLine.number);
+  }
+  if (!lines.size) return transaction;
+
+  const updates = new Map();
+  let tree;
+  const pad = (cells, count, value) => {
+    while (cells.length < count) cells.push(value);
+    return cells;
+  };
+  function repair(line, cells, force = false) {
+    const source = line.text.trim();
+    if (force || !source.startsWith('|') || tablePipes(source).at(-1) !== source.length - 1) {
+      updates.set(line.from, { from:line.from, to:line.to, insert:formatTableRow(cells) });
+    }
+  }
+  for (const number of lines) {
+    const line = newDoc.line(number);
+    if (!isTableRow(line.text) && !separatorCells(line.text)) continue;
+    const divider = findTableDivider(newDoc, number);
+    if (!divider) continue;
+    const header = newDoc.line(divider.number - 1);
+    tree ??= transaction.docChanged ? taskParser.parse(newDoc.toString()) : syntaxTree(startState);
+    if (isLiteralBlock(tree, header) || isLiteralBlock(tree, line)) continue;
+    const labels = rowCells(header.text), markers = separatorCells(divider.text);
+    const width = Math.max(labels.length, markers.length);
+    repair(header, pad(labels, width, ''), labels.length < width);
+    const brokenDivider = markers.length < width || markers.length !== rowCells(divider.text).length;
+    repair(divider, pad(markers.map(marker => marker.replace(/-+/, dashes => dashes.padEnd(3, '-'))), width, '---'), brokenDivider);
+    if (number > divider.number && isTableRow(line.text) && !separatorCells(line.text)) {
+      const cells = rowCells(line.text);
+      repair(line, pad(cells, width, ''), cells.length < width);
+    }
+  }
+  return updates.size ? [transaction, { changes:[...updates.values()], sequential:true }] : transaction;
+});
+
+function tableKey(view, key) {
+  const { state } = view;
+  if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return false;
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  const tree = syntaxTree(state);
+  if (!isTableRow(line.text) || isLiteralBlock(tree, line) || separatorCells(line.text)) return false;
+  const divider = findTableDivider(state.doc, line.number);
+  if (!divider && !/^ {0,3}\|/.test(line.text)) return false;
+  const cells = rowCells(line.text);
+
+  if (key === 'Tab') {
+    const next = tableCellRanges(line.text).slice(1).find(cell => cell.from > head - line.from);
+    if (next) {
+      const leadingSpace = line.text[next.from] === ' ' ? 1 : 0;
+      view.dispatch({ selection:{ anchor:line.from + next.from + leadingSpace }, scrollIntoView:true });
+      return true;
+    }
+    const end = line.text.trimEnd().length;
+    const closed = tablePipes(line.text).at(-1) === end - 1;
+    const insert = closed ? '  |' : ' |  |';
+    const changes = [{ from:line.from + end, to:line.to, insert }];
+    if (divider && line.number > divider.number) {
+      const header = state.doc.line(divider.number - 1);
+      const labels = rowCells(header.text), markers = separatorCells(divider.text);
+      const width = cells.length + 1;
+      if (width > Math.max(labels.length, markers.length)) {
+        while (labels.length < width) labels.push('');
+        while (markers.length < width) markers.push('---');
+        changes.push({ from:header.from, to:header.to, insert:formatTableRow(labels) });
+        changes.push({ from:divider.from, to:divider.to, insert:formatTableRow(markers) });
+      }
+    }
+    const changeSet = state.changes(changes);
+    view.dispatch({
+      changes:changeSet,
+      selection:{ anchor:changeSet.mapPos(line.from + end, -1) + insert.length - 2 },
+      userEvent:'input', scrollIntoView:true
+    });
+    return true;
+  }
+
+  if (divider || !cells.some(Boolean)) return false;
+  const header = formatTableRow(cells);
+  const separator = formatTableRow(cells.map(() => '---'));
+  const row = formatTableRow(cells.map(() => ''));
+  view.dispatch({
+    changes:{ from:line.from, to:line.to, insert:[header, separator, row].join(state.lineBreak) },
+    selection:{ anchor:line.from + header.length + separator.length + 4 },
+    userEvent:'input', scrollIntoView:true
+  });
+  return true;
+}
+
+function removeEmptyTableColumn(view, backward) {
+  const { state } = view;
+  const { main, ranges } = state.selection;
+  if (ranges.length !== 1 || !main.empty) return false;
+  const line = state.doc.lineAt(main.head);
+  if (!isTableRow(line.text) || separatorCells(line.text) || isLiteralBlock(syntaxTree(state), line)) return false;
+  const cells = tableCellRanges(line.text);
+  const offset = main.head - line.from;
+  const column = cells.findIndex(({ from, to }) =>
+    line.text[to] === '|' && offset >= from && offset <= to + (backward ? 1 : 0) &&
+    !line.text.slice(from, to).trim());
+  if (column < 0 || cells.length < 2) return false;
+
+  const divider = findTableDivider(state.doc, line.number);
+  const rows = divider ? [] : [line];
+  if (divider) {
+    const header = state.doc.line(divider.number - 1);
+    if (rowCells(header.text).length < 2 || !separatorCells(divider.text)[column]) return false;
+    rows.push(header);
+    for (let number = divider.number + 1; number <= state.doc.lines; number++) {
+      const row = state.doc.line(number);
+      if (!isTableRow(row.text)) break;
+      rows.push(row);
+    }
+  } else if (!/^ {0,3}\|/.test(line.text)) {
+    return false;
+  }
+  if (rows.some(row => rowCells(row.text)[column])) return false;
+
+  const dividerRanges = divider && tableCellRanges(divider.text);
+  const markers = divider && separatorCells(divider.text);
+  if (divider && dividerRanges.length === markers.length) rows.push(divider);
+  const changes = [];
+  for (const row of rows) {
+    const cell = tableCellRanges(row.text)[column];
+    if (!cell) continue;
+    const closingPipe = row.text[cell.to] === '|' ? 1 : 0;
+    changes.push({ from:row.from + cell.from, to:row.from + cell.to + closingPipe });
+  }
+  if (divider && dividerRanges.length !== markers.length) {
+    markers.splice(column, 1);
+    changes.push({ from:divider.from, to:divider.to, insert:formatTableRow(markers) });
+  }
+  const changeSet = state.changes(changes);
+  view.dispatch({
+    changes:changeSet,
+    selection:{ anchor:changeSet.mapPos(line.from + cells[column].from, -1) },
+    userEvent:backward ? 'delete.backward' : 'delete.forward',
+    scrollIntoView:true
+  });
+  return true;
 }
 
 function tableCells(state, row) {
@@ -671,7 +874,13 @@ export function createEditor(parent, source, onChange, openLink, getImageBaseUrl
     root:parent.getRootNode(),
     state:EditorState.create({ doc:source, extensions:[
       markdown({ base:markdownLanguage, extensions:markdownExtensions }), normalizeTaskShorthand, history(), drawSelection(),
-      EditorView.lineWrapping, livePreview(getImageBaseUrl, renderCell), extendTableAlignment, theme,
+      EditorView.lineWrapping, livePreview(getImageBaseUrl, renderCell), extendTableAlignment, repairTableSyntax, theme,
+      Prec.highest(keymap.of([
+        { key:'Tab', run:view => tableKey(view, 'Tab') },
+        { key:'Enter', run:view => tableKey(view, 'Enter') },
+        { key:'Delete', run:view => removeEmptyTableColumn(view, false) },
+        { key:'Backspace', run:view => removeEmptyTableColumn(view, true) }
+      ])),
       syntaxHighlighting(HighlightStyle.define([{ tag:tags.processingInstruction, color:'var(--syntax)' }])),
       EditorView.contentAttributes.of({ 'aria-label':'Markdown live preview', spellcheck:'true' }),
       EditorView.mouseSelectionStyle.of(tableMouseSelection),

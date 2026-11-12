@@ -276,7 +276,7 @@
   const titleInput = root.querySelector('.filename');
   let renderedMarkdown, renderedImageBaseUrl, renderTimer;
   let totalWords = 0, selectedWords;
-  titleInput.value = filename;
+  titleInput.value = displayTitle(filename);
 
   const embeddedImages = new Map();
   const embedPrefix = crypto.getRandomValues(new Uint32Array(4)).join('-');
@@ -463,8 +463,11 @@
     });
     return fragment;
   }
+  function displayTitle(name) {
+    return name.replace(/\.md$/i, '') || 'Untitled';
+  }
   function pendingFilename() {
-    if (titleInput.value === filename) return filename;
+    if (titleInput.value === displayTitle(filename)) return filename;
     const name = titleInput.value.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '-');
     if (!name || /^\.md$/i.test(name)) return filename;
     return /\.md$/i.test(name) ? name : `${name}.md`;
@@ -478,7 +481,7 @@
     const syncing = typingTimer !== undefined || Boolean(draftWrite);
     const draftError = dirty && !syncing;
     const syncLabel = syncing ? 'Draft autosave pending' : draftError ? 'Draft has unsaved changes' : storedDraft ? 'Draft saved locally' : 'No unsaved changes';
-    document.title = `${dirty ? '• ' : ''}${pendingFilename()}`;
+    document.title = `${dirty ? '• ' : ''}${displayTitle(pendingFilename())}`;
     draftLabel.hidden = !isDraft;
     sync.setAttribute('aria-label', syncLabel);
     sync.title = syncLabel;
@@ -494,7 +497,7 @@
   }
   function commitTitle() {
     filename = pendingFilename();
-    titleInput.value = filename;
+    titleInput.value = displayTitle(filename);
     updateStatus();
   }
   function countWords(content) {
@@ -583,6 +586,7 @@
   }
   function printDocument() {
     render();
+    document.title = displayTitle(pendingFilename());
     window.print();
   }
   let printLayout;
@@ -764,7 +768,7 @@
       savedText = snapshot.markdown;
       if (pendingFilename() === snapshot.filename) {
         filename = savedFilename;
-        titleInput.value = filename;
+        titleInput.value = displayTitle(filename);
       }
       saveNotice = '';
       if (storedDraft && !hasUnsavedChanges()) {
@@ -799,8 +803,8 @@
     }
     if (event.key !== 'Enter' && event.key !== 'Escape') return;
     event.preventDefault();
-    if (event.key === 'Escape' && titleInput.value !== filename) {
-      titleInput.value = filename;
+    if (event.key === 'Escape' && titleInput.value !== displayTitle(filename)) {
+      titleInput.value = displayTitle(filename);
       documentChanged();
     }
     if (editing) richEditor.focus();
@@ -812,7 +816,7 @@
   window.addEventListener('beforeprint', () => {
     // Chromium can reject Trusted Types callbacks while dispatching this event.
     document.documentElement.style.setProperty('overflow', 'visible', 'important');
-    document.title = pendingFilename();
+    document.title = displayTitle(pendingFilename());
     printLayout?.remove();
     printLayout = MarkdownEditor.paginateFootnotes(preview, root);
   });
@@ -889,7 +893,7 @@
     setEditing(true);
     if (!storedDraft) {
       titleInput.focus();
-      titleInput.setSelectionRange(0, filename.length - '.md'.length);
+      titleInput.select();
     }
   } else if (storageAvailable) {
     requestStorage('record-open', { filename }).catch(error => console.error(error));

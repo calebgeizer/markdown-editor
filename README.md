@@ -20,7 +20,9 @@ The extension comes with its browser bundle in `vendor/`. You can install it in 
 - Centered document zoom and a light/dark toggle that follows your system until you choose a theme.
 - Single line breaks stay visible. Use `\newpage` or `{{< pagebreak >}}` on its own line to start a new printed page.
 - Markdown tables preview row by row. Click a row or move the caret into it to edit its Markdown.
-- Click task checkboxes in Read or Edit mode to update the Markdown.
+- new table column created when pressing tab after writing: `| column 1 `
+- table header is established after pressing enter on a row of new table cells.
+- Click task checkboxes in Read or Edit mode to update the Markdown. Typing `- []` or `-[]` expands to `- [ ]`.
 - Extended syntax includes footnotes, heading IDs, definition lists, emoji shortcodes, highlights, subscripts, superscripts, automatic links, and syntax highlighting for fenced code blocks in Read mode.
 - Inline images with `![[image.jpg]]`. Use a path relative, an absolute local path, or an HTTP(S) image URL.
 - Print Button with PDF Export
