@@ -1,4 +1,51 @@
 let database;
+let creatingDownloadDocument;
+
+function ensureDownloadDocument() {
+  if (!creatingDownloadDocument) {
+    creatingDownloadDocument = (async () => {
+      const url = chrome.runtime.getURL('download.html');
+      const contexts = await clients.matchAll({ includeUncontrolled: true, type: 'window' });
+      if (contexts.some(context => context.url === url)) return;
+      await chrome.offscreen.createDocument({
+        url: 'download.html',
+        reasons: ['BLOBS'],
+        justification: 'Create local Markdown files for Chrome’s Save As dialog.'
+      });
+    })().finally(() => { creatingDownloadDocument = undefined; });
+  }
+  return creatingDownloadDocument;
+}
+
+function revokeDownloadUrl(url) {
+  return chrome.runtime.sendMessage({ target: 'download-document', type: 'revoke-blob', url });
+}
+
+async function startSave(filename, markdown) {
+  await ensureDownloadDocument();
+  const url = await chrome.runtime.sendMessage({ target: 'download-document', type: 'create-blob', markdown });
+  try {
+    return await chrome.downloads.download({ url, filename, saveAs: true });
+  } catch (error) {
+    await revokeDownloadUrl(url);
+    throw error;
+  }
+}
+
+async function saveStatus(id) {
+  const [item] = await chrome.downloads.search({ id });
+  if (!item || item.byExtensionId !== chrome.runtime.id || item.error === 'USER_CANCELED') return { state: 'cancelled' };
+  return { state: item.state, path: item.state === 'complete' ? item.filename : undefined };
+}
+
+chrome.downloads.onChanged.addListener(({ id, state }) => {
+  if (state?.current !== 'complete' && state?.current !== 'interrupted') return;
+  chrome.downloads.search({ id }).then(([item]) => {
+    if (item?.byExtensionId === chrome.runtime.id && item.url.startsWith(`blob:${chrome.runtime.getURL('')}`)) {
+      return revokeDownloadUrl(item.url);
+    }
+  }).catch(error => console.error('Could not release the Markdown download.', error));
+});
 
 function openDatabase() {
   if (!database) {
@@ -48,6 +95,10 @@ async function transact(stores, mode, operation) {
 
 async function handleMessage(message, sender) {
   switch (message.type) {
+    case 'start-save':
+      return startSave(message.filename, message.markdown);
+    case 'save-status':
+      return saveStatus(message.id);
     case 'record-open': {
       const url = new URL(sender.url);
       if (!['file:', 'https:', 'http:'].includes(url.protocol) || !/\.md$/i.test(url.pathname)) return;
@@ -82,6 +133,7 @@ async function handleMessage(message, sender) {
           revision: crypto.randomUUID(),
           filename: message.filename,
           markdown: message.markdown,
+          savedPath: message.savedPath,
           updatedAt: Date.now()
         };
         store.put(draft);
@@ -100,7 +152,7 @@ async function handleMessage(message, sender) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (!message?.type) return;
+  if (!message?.type || message.target === 'download-document') return;
   const extensionPage = sender.url?.startsWith(chrome.runtime.getURL(''));
   const requiresExtensionPage = message.type === 'list-files' || message.type === 'get-draft' ||
     (message.type === 'delete-draft' && message.revision === undefined);
@@ -109,7 +161,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   handleMessage(message, sender).then(
     result => respond({ ok: true, result }),
     error => {
-      console.error('Could not access Markdown storage.', error);
+      console.error('Could not complete the Markdown request.', error);
       respond({ ok: false });
     }
   );

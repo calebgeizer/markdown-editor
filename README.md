@@ -17,3 +17,4 @@ A light weight chrome extension that lets you create, view and edit markdown fil
 - Live Preview editor
 - Print Button with PDF Export
 - Offline Support
+

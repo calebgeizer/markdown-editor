@@ -25,7 +25,15 @@
     try { filename = decodeURIComponent(filename); } catch {}
   }
   let savedFilename = filename;
-  let markdown = source, savedText = source, hasDownloaded = false, richEditor = null, editing = false;
+  let savedPath = storedDraft?.savedPath;
+  if (location.protocol === 'file:') {
+    let path = location.pathname;
+    try { path = decodeURIComponent(path); } catch {}
+    if (location.hostname) path = `//${location.hostname}${path}`;
+    else if (/^\/[a-z]:\//i.test(path)) path = path.slice(1).replaceAll('/', '\\');
+    savedPath = path;
+  }
+  let markdown = source, savedText = source, richEditor = null, editing = false;
   const storageAvailable = Boolean(globalThis.chrome?.runtime?.id);
   let draftWrite, downloadCleanup = false, saveNotice = '';
   let typingTimer, lastEditAt, typingInterval, autosaveBlocked = false;
@@ -66,6 +74,9 @@
       td,th { border:1px solid #d9d9d0; padding:8px 12px; } img { max-width:100%; }
       hr { border:0; border-top:1px solid #d9d9d0; margin:24px 0; }
       footer { display:flex; gap:12px; justify-content:space-between; padding:10px 24px; font-size:11px; color:#8a8a80; }
+      .save-info { display:grid; gap:3px; min-width:0; }
+      .save-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .hint { flex:none; }
       .editor { min-height:50vh; }
       @media(max-width:650px) { header { gap:8px; padding:10px 16px; } .document { padding:32px 22px 64px; } footer { padding:9px 16px; } .hint { display:none; } }
       @media print {
@@ -102,10 +113,14 @@
         </button>
       </header>
       <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
-      <footer><span role="status" aria-live="polite"></span><span class="hint">t edit · Esc read</span></footer>
+      <footer>
+        <div class="save-info"><span role="status" aria-live="polite"></span><span class="save-location"></span></div>
+        <span class="hint">t edit · Esc read</span>
+      </footer>
     </div>`;
   const preview = root.querySelector('article'), editorMount = root.querySelector('.editor');
   const modeButton = root.querySelector('.mode'), status = root.querySelector('[role="status"]');
+  const saveLocation = root.querySelector('.save-location');
   const saveButton = root.querySelector('.save'), draftLabel = root.querySelector('.draft-label');
   const sync = root.querySelector('.draft-sync');
   const syncedIcon = sync.querySelector('.synced'), syncingIcon = sync.querySelector('.syncing');
@@ -140,7 +155,7 @@
   }
   function updateStatus() {
     const dirty = hasUnsavedChanges();
-    const isDraft = storedDraft || dirty || (isExtensionDocument && !hasDownloaded);
+    const isDraft = storedDraft || dirty || (isExtensionDocument && !savedPath);
     const syncing = typingTimer !== undefined || Boolean(draftWrite);
     const draftError = dirty && !syncing;
     const syncLabel = syncing ? 'Draft autosave pending' : draftError ? 'Draft has unsaved changes' : storedDraft ? 'Draft saved locally' : 'No unsaved changes';
@@ -154,8 +169,9 @@
     if (saveNotice) status.textContent = saveNotice;
     else if (dirty) status.textContent = 'Unsaved edits';
     else if (storedDraft) status.textContent = 'Draft saved';
-    else if (isExtensionDocument) status.textContent = hasDownloaded ? 'File downloaded' : 'Save to download this file';
-    else status.textContent = hasDownloaded ? 'Copy downloaded · original unchanged' : 'Offline · saves download a copy';
+    else status.textContent = savedPath ? 'Saved' : 'Save to choose a location';
+    saveLocation.textContent = savedPath ?? 'No local file saved';
+    saveLocation.title = savedPath ?? '';
   }
   function commitTitle() {
     filename = pendingFilename();
@@ -230,6 +246,7 @@
     try {
       storedDraft = await requestStorage('save-draft', {
         ...snapshot,
+        savedPath,
         id: storedDraft?.id,
         revision: storedDraft?.revision
       });
@@ -261,37 +278,53 @@
     updateStatus();
   }
   async function save() {
-    if (downloadCleanup) return;
+    if (saveButton.disabled) return;
     commitTitle();
-    const url = URL.createObjectURL(new Blob([markdown], { type:'text/markdown;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = filename;
-    root.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-    savedText = markdown; savedFilename = filename; hasDownloaded = true;
-    saveNotice = '';
-    if (!storedDraft && !draftWrite) {
-      updateStatus();
-      return;
-    }
-
-    downloadCleanup = true;
+    const snapshot = { filename, markdown };
     saveButton.disabled = true;
+    saveNotice = 'Choose a save location…';
     updateStatus();
     try {
-      if (draftWrite) await draftWrite;
-      if (storedDraft) {
-        const removed = await requestStorage('delete-draft', { id: storedDraft.id, revision: storedDraft.revision });
-        if (!removed) saveNotice = 'File downloaded · newer draft kept';
+      const id = await requestStorage('start-save', snapshot);
+      let result = await requestStorage('save-status', { id });
+      while (result.state === 'in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        result = await requestStorage('save-status', { id });
       }
-      storedDraft = undefined;
+      if (result.state === 'cancelled') {
+        saveNotice = 'Save canceled';
+        return;
+      }
+      if (result.state !== 'complete' || !result.path) throw new Error('Save did not complete.');
+
+      downloadCleanup = true;
+      if (draftWrite) await draftWrite;
+      savedPath = result.path;
+      savedFilename = savedPath.split(/[/\\]/).pop();
+      savedText = snapshot.markdown;
+      if (pendingFilename() === snapshot.filename) {
+        filename = savedFilename;
+        titleInput.value = filename;
+      }
+      saveNotice = '';
+      if (storedDraft && !hasUnsavedChanges()) {
+        try {
+          const removed = await requestStorage('delete-draft', { id: storedDraft.id, revision: storedDraft.revision });
+          if (!removed) saveNotice = 'File saved · newer draft kept';
+          storedDraft = undefined;
+        } catch {
+          saveNotice = 'File saved · could not remove the draft';
+        }
+      }
       updateDraftUrl();
     } catch {
-      saveNotice = 'File downloaded · could not remove draft. Save again to retry.';
+      saveNotice = 'Could not save the file. Try again.';
     } finally {
+      const saved = downloadCleanup;
       downloadCleanup = false;
       saveButton.disabled = false;
       updateStatus();
-      if (typingTimer === undefined) saveDraft();
+      if (saved && typingTimer === undefined) saveDraft();
     }
   }
   titleInput.addEventListener('input', documentChanged);

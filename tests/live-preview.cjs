@@ -9,6 +9,22 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/*',route=>{requests.push(route.request().url());return route.fulfill({contentType:'text/html',body:'<pre>'+source.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</pre>'});});
   await page.goto('http://markdown.test/notes.md');
+  await page.evaluate(()=>{
+    let savedPath;
+    window.requestStorage=async (type,fields)=>{
+      if(type==='start-save'){
+        const link=document.createElement('a');
+        link.href=URL.createObjectURL(new Blob([fields.markdown],{type:'text/markdown'}));
+        link.download=fields.filename;
+        document.body.append(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+        savedPath='/test/'+fields.filename;
+        return 1;
+      }
+      if(type==='save-status')return {state:'complete',path:savedPath};
+      throw new Error('Unexpected extension request '+type);
+    };
+  });
   for(const script of ['vendor/marked.js','vendor/purify.js','vendor/markdown-editor.js','viewer.js'])await page.addScriptTag({path:base+'/'+script});
   async function download(){const promise=page.waitForEvent('download');await page.getByRole('button',{name:'Save Markdown',exact:true}).click();const file=await promise;return fs.readFileSync(await file.path(),'utf8');}
   const title=page.getByRole('textbox',{name:'File title'});
@@ -22,6 +38,7 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
       'Tab from the title must focus the editor in either mode');
   }
   assert.equal(await download(),source,'editing without changes must preserve source exactly');
+  assert.equal(await page.locator('.save-location').innerText(),'/test/notes.md');
   assert.equal(await page.locator('.md-code-line .md-bold').count(),0,'code must stay literal');
   await page.locator('.md-task').check();assert.equal(await download(),source.replace('- [ ] Task','- [x] Task'));
   await page.locator('.md-task').uncheck();assert.equal(await download(),source);
