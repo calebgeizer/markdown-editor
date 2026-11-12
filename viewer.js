@@ -79,7 +79,7 @@
       footer { display:flex; gap:12px; justify-content:space-between; padding:10px 24px; font-size:11px; color:#8a8a80; }
       .save-info { display:grid; gap:3px; min-width:0; }
       .save-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .hint { flex:none; }
+      .document-info { display:grid; gap:3px; flex:none; align-content:start; text-align:right; }
       .editor { min-height:50vh; }
       @media(max-width:650px) { header { gap:8px; padding:10px 16px; } .document { padding:32px 22px 64px; } footer { padding:9px 16px; } .hint { display:none; } }
       @media print {
@@ -121,12 +121,18 @@
       <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
       <footer>
         <div class="save-info"><span role="status" aria-live="polite"></span><span class="save-location"></span></div>
-        <span class="hint">t edit · Esc read</span>
+        <div class="document-info">
+          <span class="hint">t edit · Esc read</span>
+          <span class="word-count"></span>
+        </div>
       </footer>
     </div>`;
   const preview = root.querySelector('article'), editorMount = root.querySelector('.editor');
   const modeButton = root.querySelector('.mode'), status = root.querySelector('[role="status"]');
   const saveLocation = root.querySelector('.save-location');
+  const wordCount = root.querySelector('.word-count');
+  const wordSegmenter = new Intl.Segmenter(undefined, { granularity:'word' });
+  const wordBoundary = /^(?:BLOCKQUOTE|BR|DIV|H[1-6]|LI|P|PRE|TD|TH|TR)$/;
   const saveButton = root.querySelector('.save'), draftLabel = root.querySelector('.draft-label');
   const downloadButton = root.querySelector('.download');
   const sync = root.querySelector('.draft-sync');
@@ -134,6 +140,7 @@
   const syncError = sync.querySelector('.sync-error');
   const titleInput = root.querySelector('.filename');
   let renderedMarkdown, renderedImageBaseUrl, renderTimer;
+  let totalWords = 0, selectedWords;
   titleInput.value = filename;
 
   const embeddedImages = new Map();
@@ -208,6 +215,62 @@
     titleInput.value = filename;
     updateStatus();
   }
+  function countWords(content) {
+    const text = [];
+    function collect(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text.push(node.data);
+        return;
+      }
+      const separatesWords = wordBoundary.test(node.nodeName);
+      if (separatesWords) text.push(' ');
+      for (const child of node.childNodes) collect(child);
+      if (separatesWords) text.push(' ');
+    }
+    collect(content);
+    let count = 0;
+    for (const segment of wordSegmenter.segment(text.join(''))) {
+      if (segment.isWordLike) count++;
+    }
+    return count;
+  }
+  function formatWordCount(count) {
+    return `${count.toLocaleString()} ${count === 1 ? 'word' : 'words'}`;
+  }
+  function updateWordCount() {
+    const prefix = selectedWords === undefined ? '' : `(${formatWordCount(selectedWords)}) `;
+    wordCount.textContent = prefix + formatWordCount(totalWords);
+  }
+  function setSelectedWords(count) {
+    if (count === selectedWords) return;
+    selectedWords = count;
+    updateWordCount();
+  }
+  function countSelectedMarkdown(selection) {
+    if (!selection.length) {
+      setSelectedWords(undefined);
+      return;
+    }
+    let count = 0;
+    for (const source of selection) {
+      count += countWords(sanitize(markdownParser.parse(source)));
+      embeddedImages.clear();
+    }
+    setSelectedWords(count);
+  }
+  function countReadingSelection() {
+    if (editing) return;
+    const selection = root.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
+    if (!range || range.collapsed || !range.intersectsNode(preview)) {
+      setSelectedWords(undefined);
+      return;
+    }
+    const selected = range.cloneRange();
+    if (!preview.contains(selected.startContainer)) selected.setStart(preview, 0);
+    if (!preview.contains(selected.endContainer)) selected.setEnd(preview, preview.childNodes.length);
+    setSelectedWords(countWords(selected.cloneContents()));
+  }
   function render() {
     clearTimeout(renderTimer);
     const baseUrl = getImageBaseUrl();
@@ -220,6 +283,8 @@
     }
     embeddedImages.clear();
     preview.replaceChildren(fragment);
+    totalWords = countWords(preview);
+    updateWordCount();
     renderedMarkdown = markdown;
     renderedImageBaseUrl = baseUrl;
   }
@@ -248,11 +313,16 @@
           clearTimeout(renderTimer);
           renderTimer = setTimeout(render, 150);
           documentChanged();
-        }, openLink, getImageBaseUrl);
+        }, openLink, getImageBaseUrl, countSelectedMarkdown);
       }
       richEditor.focus();
       richEditor.requestMeasure();
-    } else { richEditor?.blur(); render(); }
+      countSelectedMarkdown(richEditor.selectedMarkdown());
+    } else {
+      richEditor?.blur();
+      setSelectedWords(undefined);
+      render();
+    }
   }
   function documentChanged() {
     autosaveBlocked = false;
@@ -439,6 +509,7 @@
     updateStatus();
   });
   modeButton.addEventListener('click', () => setEditing(!editing));
+  document.addEventListener('selectionchange', countReadingSelection);
   window.addEventListener('keydown', event => {
     if (event.isComposing) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); save(); return; }

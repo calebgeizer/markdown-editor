@@ -74,7 +74,9 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.locator('.md-task').uncheck();assert.equal(await download(),source);
   await page.locator('.cm-line').filter({hasText:'A bold paragraph'}).click();
   await page.keyboard.press('Home');
-  assert.equal(await page.locator('.cm-line').filter({hasText:'A **bold** paragraph'}).count(),1,'active line must reveal existing syntax');
+  assert.equal(await page.locator('.cm-line').filter({hasText:'A bold paragraph'}).count(),1,'bold markers must hide outside the span on the same line');
+  await page.locator('.md-bold').filter({hasText:'bold'}).click();
+  assert.equal(await page.locator('.cm-line').filter({hasText:'A **bold** paragraph'}).count(),1,'clicking bold text must reveal the markers');
   assert.equal(await page.locator('.cm-line.md-h1').innerText(),'Heading','inactive heading syntax should hide');
   await page.locator('.cm-line.md-h1').click();await page.keyboard.press('Home');
   assert.equal(await page.locator('.cm-line.md-h1').innerText(),'# Heading','active heading syntax must reveal');
@@ -110,12 +112,18 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   assert.equal(await download(),'bold','bold shortcut must remove existing delimiters without losing selection');
   await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.press('ControlOrMeta+b');
   assert.equal(await download(),'**bold**','bold shortcut must wrap the selected source');
+  await editor.focus();await page.keyboard.press('End');
+  assert.equal(await editor.innerText(),'**bold**','bold markers must stay visible immediately after the closing marker');
+  await page.keyboard.insertText('.');
+  assert.equal(await editor.innerText(),'bold.','typing past the bold span must hide the markers');
+  assert.equal(await download(),'**bold**.','hiding bold markers must preserve the source');
   await editor.click();await page.keyboard.press('ControlOrMeta+a');
   const linkSource='[**Project**](https://example.com/guide_(start) "Guide")';
+  const linkWithoutBoldMarkers=linkSource.replace('**Project**','Project');
   await page.keyboard.insertText(linkSource.slice(0,-1));
-  assert.equal(await page.locator('.cm-line').innerText(),linkSource.slice(0,-1),'an incomplete link must show its source');
+  assert.equal(await page.locator('.cm-line').innerText(),linkWithoutBoldMarkers.slice(0,-1),'an incomplete link must show its URL syntax');
   await page.keyboard.insertText(')');
-  assert.equal(await page.locator('.cm-line').innerText(),linkSource,'a caret at the closing parenthesis must keep the link source visible');
+  assert.equal(await page.locator('.cm-line').innerText(),linkWithoutBoldMarkers,'a caret at the closing parenthesis must keep the URL syntax visible');
   await page.keyboard.insertText('.');
   assert.equal(await page.locator('.cm-line').innerText(),'Project.','punctuation after a link must show its preview');
   await page.keyboard.press('Backspace');
@@ -181,6 +189,46 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   assert.match(await editor.innerText(),/!\[\[https:\/\/images.test\/sample.svg\]\]/,'clicking an image must reveal the editable path');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('article img.md-inline-image').evaluate(async image=>{await image.decode();return image.naturalWidth;}),48);
+  await page.keyboard.press('t');await editor.waitFor();
+  const arrowResults=[
+    ['Left','one top\n|one two\none end','one top\n| two\none end'],
+    ['Right','one top\none two|\none end','one top\none|\none end'],
+    ['Up','one| top\none two\none end','one| two\none end'],
+    ['Down','one top\none two\none| end','one top\none| end']
+  ];
+  for(const modifiers of ['Alt','Control+Alt','Shift+Alt']){
+    for(const [arrow,afterMove,afterSelection] of arrowResults){
+      await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.insertText('one top\none two\none end');
+      await page.keyboard.press('ArrowUp');await page.keyboard.press('Home');
+      for(let index=0;index<3;index++)await page.keyboard.press('ArrowRight');
+      await page.keyboard.press(modifiers+'+Arrow'+arrow);
+      await page.keyboard.insertText('|');
+      assert.equal(await download(),modifiers==='Alt'?afterMove:afterSelection,modifiers+'+Arrow'+arrow+' must use the correct caret movement');
+    }
+  }
+  await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.insertText('only one line');
+  await page.keyboard.press('Home');await page.keyboard.press('Shift+Alt+ArrowUp');
+  await page.keyboard.press('End');await page.keyboard.press('Shift+Alt+ArrowDown');
+  assert.equal(await download(),'only one line','Shift+Option must not duplicate a line at a document boundary');
+  await page.setViewportSize({width:1280,height:900});
+  assert.equal(await page.locator('.hint + .word-count').count(),1,'word count must follow the shortcut hint');
+  await editor.click();await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('# Title\n\n**bold** [two words](https://example.invalid/path)\n\n| One | Two |\n| --- | --- |\n| Three | Four |\n\nco**de** and `code sample`');
+  await page.getByText('12 words',{exact:true}).waitFor();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Shift+Alt+ArrowLeft');
+  await page.getByText('(1 word) 12 words',{exact:true}).waitFor();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.getByText('(12 words) 12 words',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.word-count').innerText(),'12 words');
+  await page.locator('article > p').first().evaluate(paragraph=>paragraph.getRootNode().getSelection().selectAllChildren(paragraph));
+  await page.getByText('(3 words) 12 words',{exact:true}).waitFor();
+  await page.locator('article').evaluate(article=>article.getRootNode().getSelection().removeAllRanges());
+  await page.getByText('12 words',{exact:true}).waitFor();
+  await page.keyboard.press('t');await editor.waitFor();await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Backspace');
+  await page.getByText('0 words',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
   console.log('Passed: source-preserving edit/save; active-line marker reveal; inline links and Command-click; deletion of existing # and ** formatting; compact heading height; typed headings; single newline; undo/redo; reading/editing toggle; print preparation; mobile layout; no network requests or JS errors.');
  }finally{await browser.close();}

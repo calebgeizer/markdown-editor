@@ -1,6 +1,10 @@
 import { EditorState, EditorSelection } from '@codemirror/state';
 import { EditorView, Decoration, ViewPlugin, WidgetType, keymap, drawSelection } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import {
+  cursorGroupLeft, cursorGroupRight, cursorLineUp, cursorLineDown,
+  defaultKeymap, history, historyKeymap, indentWithTab,
+  selectGroupLeft, selectGroupRight, selectLineUp, selectLineDown
+} from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
@@ -119,7 +123,11 @@ function decorations(view, imageBaseUrl) {
         mark(from, to, className);
       }
       if (name === 'EmphasisMark' || name === 'StrikethroughMark' || name === 'CodeMark') {
-        hide(from, to, undefined, inlineLink?.reveal);
+        const parent = node.parent;
+        const reveal = parent?.name === 'StrongEmphasis'
+          ? revealInlineSource(parent.from, parent.to)
+          : inlineLink?.reveal;
+        hide(from, to, undefined, reveal);
       }
       if (name === 'ListMark' && !/^\d/.test(state.sliceDoc(from, to))) hide(from, to, new Bullet());
       if (name === 'TaskMarker') hide(from, to, new Task(from, /x/i.test(state.sliceDoc(from, to))));
@@ -243,7 +251,27 @@ function commandClickedLink(event) {
   return event.target.closest('[data-md-link]')?.dataset.mdLink;
 }
 
-export function createEditor(parent, source, onChange, openLink, getImageBaseUrl) {
+const optionArrowKeymap = [
+  ['ArrowLeft', cursorGroupLeft, selectGroupLeft],
+  ['ArrowRight', cursorGroupRight, selectGroupRight],
+  ['ArrowUp', cursorLineUp, selectLineUp],
+  ['ArrowDown', cursorLineDown, selectLineDown]
+].flatMap(([key, move, select]) => [
+  ['Alt', move], ['Ctrl-Alt', select], ['Shift-Alt', select]
+].map(([modifiers, command]) => ({
+  key:`${modifiers}-${key}`,
+  run(view) {
+    command(view);
+    // Consume the shortcut at document boundaries to prevent fallback line moves or copies.
+    return true;
+  }
+})));
+
+function selectedMarkdown(state) {
+  return state.selection.ranges.filter(range => !range.empty).map(range => state.sliceDoc(range.from, range.to));
+}
+
+export function createEditor(parent, source, onChange, openLink, getImageBaseUrl, onSelectionChange) {
   const view = new EditorView({
     parent,
     // The supplied ShadowRoot keeps selection and style handling inside the extension.
@@ -271,16 +299,23 @@ export function createEditor(parent, source, onChange, openLink, getImageBaseUrl
       keymap.of([
         { key:'Mod-b', run:toggleInline('**', 'StrongEmphasis') },
         { key:'Mod-i', run:toggleInline('*', 'Emphasis') },
+        ...optionArrowKeymap,
         ...historyKeymap, ...defaultKeymap, indentWithTab
       ]),
       EditorState.lineSeparator.of(source.includes('\r\n') ? '\r\n' : '\n'),
-      EditorView.updateListener.of(update => { if (update.docChanged) onChange(update.state.sliceDoc()); })
+      EditorView.updateListener.of(update => {
+        if (update.docChanged) onChange(update.state.sliceDoc());
+        if (update.docChanged || !update.state.selection.eq(update.startState.selection)) {
+          onSelectionChange(selectedMarkdown(update.state));
+        }
+      })
     ] })
   });
   return {
     focus:() => view.focus(),
     blur:() => view.contentDOM.blur(),
     requestMeasure:() => view.requestMeasure(),
-    refreshImages:() => view.dispatch({})
+    refreshImages:() => view.dispatch({}),
+    selectedMarkdown:() => selectedMarkdown(view.state)
   };
 }
