@@ -40,60 +40,96 @@
   let draftWrite, downloadCleanup = false, saveNotice = '';
   let typingTimer, lastEditAt, typingInterval, autosaveBlocked = false;
   const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#faf9f6;color:#242424;';
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `
     <style>
-      :host { all:initial; font-family:system-ui,-apple-system,sans-serif; color:#242424; }
+      :host {
+        all:initial; font-family:system-ui,-apple-system,sans-serif; color-scheme:light;
+        --surface:#faf9f6; --text:#30342e; --muted:#5c625a; --subtle:#77776e;
+        --line:#d9d9d0; --divider:#e5e4dc; --panel:#eeede7; --hover:#eae9e1;
+        --accent:#24684d; --focus:#83bca5; --syntax:#77796e; --quote-border:#a2b8a4;
+        --row-highlight:rgb(108 103 53 / 6%); --editor-selection:#cde2d4;
+        background:var(--surface); color:var(--text);
+      }
+      :host([data-theme="dark"]) {
+        color-scheme:dark;
+        --surface:#1c201e; --text:#e5e9e3; --muted:#b8c0b6; --subtle:#a7b0a6;
+        --line:#464f48; --divider:#363e38; --panel:#282e2a; --hover:#343c35;
+        --accent:#a0dbbf; --focus:#91c8ae; --syntax:#a6b0a5; --quote-border:#638c75;
+        --row-highlight:rgb(255 255 255 / 5%); --editor-selection:#375e50;
+      }
       * { box-sizing:border-box; } [hidden] { display:none !important; }
-      .app { height:100vh; display:flex; flex-direction:column; background:#faf9f6; }
-      header { display:flex; align-items:center; gap:16px; padding:12px 24px; border-bottom:1px solid #e5e4dc; background:#faf9f6; }
-      .title { display:flex; align-items:center; gap:6px; flex:1; min-width:0; }
-      .filename { field-sizing:content; min-width:4ch; max-width:28ch; padding:5px 7px; border:1px solid transparent; border-radius:5px; background:transparent; font:inherit; font-size:13px; color:#5c625a; }
-      .draft-label { flex:none; border:1px solid #d8d8d3; border-radius:3px; padding:2px 5px; color:#62645e; font-size:11px; }
-      .draft-sync { display:grid; place-items:center; width:20px; flex:none; color:#646a61; }
+      .app { height:100vh; display:flex; flex-direction:column; background:var(--surface); }
+      header {
+        display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+        grid-template-areas:"title controls actions"; align-items:center; gap:12px;
+        padding:12px 24px; border-bottom:1px solid var(--divider);
+      }
+      .title { grid-area:title; display:flex; align-items:center; gap:6px; min-width:0; }
+      .view-controls { grid-area:controls; display:flex; align-items:center; gap:8px; justify-self:center; }
+      .actions { grid-area:actions; display:flex; align-items:center; gap:4px; justify-self:end; }
+      .zoom-controls { display:flex; align-items:center; border:1px solid var(--divider); border-radius:7px; padding:2px; }
+      .zoom-controls button { padding:0 6px; height:27px; min-width:27px; }
+      .zoom-controls .zoom-step { font-size:18px; line-height:1; }
+      .zoom-controls .zoom-reset { background:var(--panel); min-width:49px; font-variant-numeric:tabular-nums; }
+      .filename { field-sizing:content; min-width:4ch; max-width:28ch; padding:5px 7px; border:1px solid transparent; border-radius:5px; background:transparent; font:inherit; font-size:13px; color:var(--muted); }
+      .draft-label { flex:none; border:1px solid var(--line); border-radius:3px; padding:2px 5px; color:var(--muted); font-size:11px; }
+      .draft-sync { display:grid; place-items:center; width:20px; flex:none; color:var(--muted); }
       .draft-sync .syncing { animation:rotate .9s linear infinite; transform-origin:center; }
       @keyframes rotate { to { transform:rotate(360deg); } }
       @media(prefers-reduced-motion:reduce) { .draft-sync .syncing { animation:none; } }
       .filename:not(:focus) { text-overflow:ellipsis; }
-      .filename:hover, .filename:focus { border-color:#d9d9d0; }
-      button { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:12px; border:0; border-radius:6px; padding:8px 12px; background:transparent; color:#5c625a; cursor:pointer; }
-      button:hover { background:#eae9e1; color:#24684d; }
+      .filename:hover, .filename:focus { border-color:var(--line); }
+      button { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:12px; border:0; border-radius:6px; padding:8px 12px; background:transparent; color:var(--muted); cursor:pointer; }
+      button:hover, .zoom-controls .zoom-reset:hover { background:var(--hover); color:var(--accent); }
       button:disabled { opacity:.5; cursor:default; }
-      button:focus-visible, .filename:focus-visible { outline:2px solid #83bca5; outline-offset:2px; }
+      button:focus-visible, .filename:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
       .icon-button { width:34px; height:34px; padding:7px; flex:none; }
       main { flex:1; min-height:0; overflow:auto; }
-      .document { width:100%; max-width:840px; margin:0 auto; padding:64px 40px 100px; }
-      article { font-family:system-ui,-apple-system,sans-serif; font-size:17px; line-height:1.7; color:#30342e; overflow-wrap:anywhere; }
+      .document { width:100%; max-width:840px; margin:0 auto; padding:64px 40px 100px; zoom:var(--document-zoom, 1); }
+      article { font-family:system-ui,-apple-system,sans-serif; font-size:17px; line-height:1.7; color:var(--text); overflow-wrap:anywhere; }
       article { min-height:50vh; } article > :first-child { margin-top:0; }
       h1,h2,h3,h4,h5,h6 { line-height:1.3; letter-spacing:-.025em; }
-      h1 { font-size:2em; } h2 { font-size:1.5em; } a { color:#24684d; }
-      pre { overflow:auto; background:#eeede7; padding:16px; border-radius:6px; }
-      code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.88em; background:#eeede7; border-radius:3px; padding:2px 4px; }
+      h1 { font-size:2em; } h2 { font-size:1.5em; } a { color:var(--accent); }
+      pre { overflow:auto; background:var(--panel); padding:16px; border-radius:6px; }
+      code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.88em; background:var(--panel); border-radius:3px; padding:2px 4px; }
       pre code { padding:0; }
-      blockquote { margin-left:0; padding-left:18px; border-left:3px solid #a2b8a4; color:#686862; }
-      table { border-collapse:collapse; display:block; overflow:auto; }
-      td,th { border:1px solid #d9d9d0; padding:8px 12px; } img { max-width:100%; }
+      blockquote { margin-left:0; padding-left:18px; border-left:3px solid var(--quote-border); color:var(--muted); }
+      table { border-collapse:collapse; width:100%; table-layout:fixed; }
+      td,th { border:1px solid var(--line); padding:4px 10px; vertical-align:top; text-align:left; overflow-wrap:anywhere; }
+      :is(td,th)[align="right"] { text-align:right; }
+      :is(td,th)[align="center"] { text-align:center; }
+      th { font-weight:650; background:var(--panel); }
+      img { max-width:100%; }
+      .page-break { border:0; border-top:1px dashed var(--line); margin:24px 0; }
       .md-inline-image { height:auto; vertical-align:middle; }
-      hr { border:0; border-top:1px solid #d9d9d0; margin:24px 0; }
-      footer { display:flex; gap:12px; justify-content:space-between; padding:10px 24px; font-size:11px; color:#8a8a80; }
+      hr { border:0; border-top:1px solid var(--line); margin:24px 0; }
+      footer { display:flex; gap:12px; justify-content:space-between; padding:10px 24px; font-size:11px; color:var(--subtle); }
       .save-info { display:grid; gap:3px; min-width:0; }
       .save-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .document-info { display:grid; gap:3px; flex:none; align-content:start; text-align:right; }
       .editor { min-height:50vh; }
-      @media(max-width:650px) { header { gap:8px; padding:10px 16px; } .document { padding:32px 22px 64px; } footer { padding:9px 16px; } .hint { display:none; } }
+      @media(max-width:650px) {
+        header { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"title actions" "controls controls"; gap:8px; padding:10px 16px; }
+        .document { padding:32px 22px 64px; } footer { padding:9px 16px; } .hint { display:none; }
+      }
       @media print {
         :host { position:static !important; background:#fff !important; color:#000 !important; }
         .app { display:block; height:auto; background:#fff; }
         header, footer, .editor { display:none !important; }
         main { overflow:visible; }
-        .document { width:auto; max-width:none; padding:0; margin:0; }
+        .document { width:auto; max-width:none; padding:0; margin:0; zoom:1; color-scheme:light; --line:#d9d9d0; --quote-border:#a2b8a4; }
         article, article[hidden] { display:block !important; min-height:0; font-size:11pt; line-height:1.5; }
         article, article * { color:#000 !important; background:transparent !important; }
         article a { text-decoration:underline; }
         h1,h2,h3,h4,h5,h6 { break-after:avoid; }
         pre { overflow:visible; white-space:pre-wrap; padding:0; }
-        table { display:table; max-width:100%; }
+        table { break-inside:avoid; }
+        article th { background:#eeede7 !important; print-color-adjust:exact; }
+        thead { display:table-header-group; }
+        tr { break-inside:avoid; }
+        .page-break { break-before:page; margin:0; border:0; }
       }
     </style>
     <div class="app">
@@ -107,16 +143,29 @@
           </span>
           <span class="draft-label" hidden>Draft</span>
         </div>
-        <button class="mode" type="button" title="Edit (t)">Edit</button>
-        <button class="print icon-button" type="button" aria-label="Print" title="Print">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5M7 17H4a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-3M7 14h10v7H7zM17 12h1"/></svg>
-        </button>
-        <button class="save icon-button" type="button" aria-label="Save Markdown" title="Save Markdown (⌘/Ctrl+S)">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M7 3v6h10V3M7 21v-8h10v8"/></svg>
-        </button>
-        <button class="download icon-button" type="button" aria-label="Download Markdown" title="Download to Downloads">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-4-4 4 4 4-4M5 16v3h14v-3"/></svg>
-        </button>
+        <div class="view-controls">
+          <div class="zoom-controls" role="group" aria-label="Document zoom">
+            <button class="zoom-out zoom-step" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+            <button class="zoom-reset" type="button" title="Reset zoom to 100%">100%</button>
+            <button class="zoom-in zoom-step" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+          </div>
+          <button class="theme-toggle icon-button" type="button">
+            <svg class="moon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13.35A9 9 0 0 1 10.65 3.1 9 9 0 1 0 20.9 13.35Z"/></svg>
+            <svg class="sun" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+          </button>
+        </div>
+        <div class="actions">
+          <button class="mode" type="button" title="Edit (t)">Edit</button>
+          <button class="print icon-button" type="button" aria-label="Print" title="Print">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5M7 17H4a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-3M7 14h10v7H7zM17 12h1"/></svg>
+          </button>
+          <button class="save icon-button" type="button" aria-label="Save Markdown" title="Save Markdown (⌘/Ctrl+S)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M7 3v6h10V3M7 21v-8h10v8"/></svg>
+          </button>
+          <button class="download icon-button" type="button" aria-label="Download Markdown" title="Download to Downloads">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-4-4 4 4 4-4M5 16v3h14v-3"/></svg>
+          </button>
+        </div>
       </header>
       <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
       <footer>
@@ -128,6 +177,11 @@
       </footer>
     </div>`;
   const preview = root.querySelector('article'), editorMount = root.querySelector('.editor');
+  const zoomOut = root.querySelector('.zoom-out'), zoomReset = root.querySelector('.zoom-reset'), zoomIn = root.querySelector('.zoom-in');
+  const themeToggle = root.querySelector('.theme-toggle');
+  const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+  const themeStorage = globalThis.chrome?.storage;
+  let zoom = 100, themeOverride, themeChanged = false;
   const modeButton = root.querySelector('.mode'), status = root.querySelector('[role="status"]');
   const saveLocation = root.querySelector('.save-location');
   const wordCount = root.querySelector('.word-count');
@@ -146,8 +200,22 @@
   const embeddedImages = new Map();
   const embedPrefix = crypto.getRandomValues(new Uint32Array(4)).join('-');
   const markdownParser = new marked.Marked({
-    gfm:true,
+    gfm:true, breaks:true,
     extensions:[{
+      name:'pageBreak',
+      level:'block',
+      start(text) {
+        const nextLine = text.indexOf('\n') + 1;
+        if (!nextLine) return;
+        const index = text.slice(nextLine).search(MarkdownEditor.pageBreakLine);
+        if (index !== -1) return nextLine + index;
+      },
+      tokenizer(text) {
+        const match = MarkdownEditor.pageBreakStart.exec(text);
+        if (match) return { type:'pageBreak', raw:match[0] };
+      },
+      renderer() { return '<hr class="page-break">'; }
+    }, {
       name:'inlineImage',
       level:'inline',
       start(text) { return text.indexOf('![['); },
@@ -162,6 +230,49 @@
       }
     }]
   });
+  function setZoom(percent) {
+    zoom = Math.max(50, Math.min(200, percent));
+    host.style.setProperty('--document-zoom', zoom / 100);
+    zoomReset.textContent = `${zoom}%`;
+    zoomReset.setAttribute('aria-label', `Zoom ${zoom}%. Reset to 100%`);
+    zoomOut.disabled = zoom === 50;
+    zoomIn.disabled = zoom === 200;
+    if (editing) richEditor?.requestMeasure();
+  }
+  function applyTheme() {
+    const dark = themeOverride === 'dark' || (themeOverride === undefined && systemTheme.matches);
+    host.dataset.theme = dark ? 'dark' : 'light';
+    const label = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    themeToggle.title = label;
+    themeToggle.setAttribute('aria-label', label);
+    themeToggle.querySelector('.moon').toggleAttribute('hidden', dark);
+    themeToggle.querySelector('.sun').toggleAttribute('hidden', !dark);
+  }
+  function restoreTheme(value) {
+    themeOverride = value === 'dark' || value === 'light' ? value : undefined;
+    applyTheme();
+  }
+  setZoom(100);
+  applyTheme();
+  systemTheme.addEventListener('change', applyTheme);
+  zoomOut.addEventListener('click', () => setZoom(zoom - 10));
+  zoomReset.addEventListener('click', () => setZoom(100));
+  zoomIn.addEventListener('click', () => setZoom(zoom + 10));
+  themeToggle.addEventListener('click', () => {
+    themeChanged = true;
+    restoreTheme(host.dataset.theme === 'dark' ? 'light' : 'dark');
+    themeStorage?.local.set({ viewerTheme:themeOverride }).catch(error => console.warn('Could not save the theme preference.', error));
+  });
+  if (themeStorage) {
+    themeStorage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes.viewerTheme) return;
+      themeChanged = true;
+      restoreTheme(changes.viewerTheme.newValue);
+    });
+    themeStorage.local.get('viewerTheme').then(({ viewerTheme }) => {
+      if (!themeChanged) restoreTheme(viewerTheme);
+    }).catch(error => console.warn('Could not load the theme preference.', error));
+  }
   function getImageBaseUrl() {
     return sourceUrl ?? (savedPath ? MarkdownEditor.localFileUrl(savedPath) : location.href);
   }

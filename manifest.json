@@ -3,7 +3,7 @@
   "name": "markdown-editor",
   "version": "2.0.0",
   "description": "View and edit .md URLs offline. Save edits as a downloaded Markdown file.",
-  "permissions": ["downloads", "offscreen"],
+  "permissions": ["downloads", "offscreen", "storage"],
   "incognito": "split",
   "action": {
     "default_title": "markdown-editor",

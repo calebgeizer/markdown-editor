@@ -297,6 +297,24 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.keyboard.press('End');await page.keyboard.type('|');
   await page.keyboard.press('ArrowLeft');await page.keyboard.type('Three');
   assert.equal(await download(),'|One|Two|Three|\n|---|---:|---|\n|1|2|\n\nAfter','typing a new empty column must extend a compact separator once');
+  await editor.click();await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('First line\nSecond line\n\\newpage\nNext page\n{{< pagebreak >}}\nLast page\n\n```\n\\newpage\n```');
+  assert.equal(await editor.locator('.md-page-break').count(),2,'both standalone page markers must preview outside code');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('article .page-break').count(),2);
+  assert.equal(await page.locator('article p').first().innerText(),'First line\nSecond line','single Markdown newlines must stay visible');
+  assert.match(await page.locator('article pre').innerText(),/\\newpage/);
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  assert.equal(await page.locator('.zoom-reset').innerText(),'110%');
+  assert.equal(await page.locator('.document').evaluate(document=>getComputedStyle(document).zoom),'1.1');
+  await page.locator('.zoom-reset').click();
+  assert.equal(await page.locator('.zoom-reset').innerText(),'100%');
+  await page.emulateMedia({colorScheme:'dark'});
+  await page.getByRole('button',{name:'Switch to light mode'}).click();
+  await page.getByRole('button',{name:'Switch to dark mode'}).waitFor();
+  await page.emulateMedia({colorScheme:'light'});
+  await page.emulateMedia({colorScheme:'dark'});
+  assert.equal(await page.getByRole('button',{name:'Switch to dark mode'}).isVisible(),true,'an explicit theme must override the system setting');
   assert.deepEqual(errors,[]);
   console.log('Passed: source-preserving edit/save; active-line marker reveal; inline links and Command-click; deletion of existing # and ** formatting; compact heading height; typed headings; single newline; undo/redo; reading/editing toggle; table row previews; print preparation; mobile layout; no unexpected network requests or JS errors.');
  }finally{await browser.close();}

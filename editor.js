@@ -12,6 +12,25 @@ import { createInlineImage, matchInlineImage } from './inline-image.js';
 
 export { createInlineImage, localFileUrl, matchInlineImage } from './inline-image.js';
 
+export const pageBreakStart = /^ {0,3}(?:\\newpage|\{\{<[ \t]*pagebreak[ \t]*>\}\})[ \t]*(?:\n|$)/;
+export const pageBreakLine = /^ {0,3}(?:\\newpage|\{\{<[ \t]*pagebreak[ \t]*>\}\})[ \t]*$/m;
+const pageBreakSyntax = {
+  defineNodes:[{ name:'PageBreak', block:true }],
+  parseBlock:[{
+    name:'PageBreak',
+    before:'HorizontalRule',
+    endLeaf(_context, line) { return pageBreakLine.test(line.text.slice(line.pos)); },
+    parse(context, line) {
+      if (!pageBreakLine.test(line.text.slice(line.pos))) return false;
+      const from = context.lineStart + line.pos;
+      const to = context.lineStart + line.text.length;
+      context.nextLine();
+      context.addElement(context.elt('PageBreak', from, to));
+      return true;
+    }
+  }]
+};
+
 const inlineImageSyntax = {
   defineNodes:['InlineImage'],
   parseInline:[{
@@ -32,6 +51,16 @@ class Bullet extends WidgetType {
     span.className = 'md-bullet';
     return span;
   }
+}
+
+class PageBreakPreview extends WidgetType {
+  toDOM() {
+    const label = document.createElement('span');
+    label.className = 'md-page-break';
+    label.textContent = 'Page break';
+    return label;
+  }
+  ignoreEvent(event) { return event.type !== 'mousedown'; }
 }
 
 class Task extends WidgetType {
@@ -347,6 +376,7 @@ function decorations(view, imageBaseUrl, renderCell) {
       }
       if (name === 'CodeInfo') hide(from, to);
       if (name === 'HorizontalRule') lineClass(from, 'md-rule');
+      if (name === 'PageBreak') hide(from, to, new PageBreakPreview());
     },
     leave({ name, from, to }) {
       if (name === 'Link' && inlineLink?.from === from && inlineLink.to === to) inlineLink = undefined;
@@ -399,39 +429,41 @@ function toggleInline(delimiter, nodeName) {
 }
 
 const theme = EditorView.theme({
-  '&':{ backgroundColor:'transparent', color:'#30342e', fontSize:'17px' },
+  '&':{ backgroundColor:'transparent', color:'var(--text)', fontSize:'17px' },
   '&.cm-focused':{ outline:'none' },
   '.cm-scroller':{ fontFamily:'system-ui,-apple-system,sans-serif', lineHeight:'1.7', overflow:'visible' },
-  '.cm-content':{ padding:'0', minHeight:'50vh', caretColor:'#24684d' },
+  '.cm-content':{ padding:'0', minHeight:'50vh', caretColor:'var(--accent)' },
   '.cm-line':{ padding:'0', margin:'0', minHeight:'1.7em' },
   '.cm-h1, .md-h1':{ fontSize:'1.65em', fontWeight:'700', lineHeight:'1.4', minHeight:'1.4em' },
   '.md-h2':{ fontSize:'1.4em', fontWeight:'650', lineHeight:'1.45', minHeight:'1.45em' },
   '.md-h3':{ fontSize:'1.2em', fontWeight:'650', minHeight:'1.5em' },
   '.md-h4, .md-h5, .md-h6':{ fontWeight:'650' },
   '.md-bold':{ fontWeight:'700' }, '.md-italic':{ fontStyle:'italic' }, '.md-strike':{ textDecoration:'line-through' },
-  '.md-syntax':{ color:'#97998e', fontWeight:'400', textDecoration:'none' },
-  '.md-inline-code':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.9em', backgroundColor:'#eeede7', borderRadius:'3px' },
-  '.md-code-line':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.88em', backgroundColor:'#eeede7', padding:'0 12px' },
-  '.md-quote':{ borderLeft:'3px solid #a2b8a4', paddingLeft:'14px', color:'#686862' },
-  '.md-link':{ color:'#24684d', textDecoration:'underline', textUnderlineOffset:'3px' },
-  '.md-image':{ color:'#77776e' }, '.md-bullet':{ color:'#7e897a' },
+  '.md-syntax':{ color:'var(--syntax)', fontWeight:'400', textDecoration:'none' },
+  '.md-inline-code':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.9em', backgroundColor:'var(--panel)', borderRadius:'3px' },
+  '.md-code-line':{ fontFamily:'ui-monospace,SFMono-Regular,Consolas,monospace', fontSize:'.88em', backgroundColor:'var(--panel)', padding:'0 12px' },
+  '.md-quote':{ borderLeft:'3px solid var(--quote-border)', paddingLeft:'14px', color:'var(--muted)' },
+  '.md-link':{ color:'var(--accent)', textDecoration:'underline', textUnderlineOffset:'3px' },
+  '.md-image':{ color:'var(--subtle)' }, '.md-bullet':{ color:'var(--subtle)' },
   '.md-inline-image':{ maxWidth:'100%', height:'auto', verticalAlign:'middle', cursor:'text' },
+  '.md-page-break':{ display:'inline-flex', width:'100%', alignItems:'center', gap:'8px', color:'var(--subtle)', fontSize:'12px' },
+  '.md-page-break::before, .md-page-break::after':{ content:'""', flex:'1', borderTop:'1px dashed var(--line)' },
   '.md-table-row':{ display:'inline-grid', width:'100%', verticalAlign:'top', cursor:'text' },
-  '.md-table-cell':{ minWidth:'0', padding:'4px 10px', borderRight:'1px solid #d9d9d0', borderBottom:'1px solid #d9d9d0', whiteSpace:'normal', overflowWrap:'anywhere' },
-  '.md-table-cell:first-child':{ borderLeft:'1px solid #d9d9d0' },
-  '.md-table-header .md-table-cell':{ fontWeight:'650', backgroundColor:'#eeede7', borderTop:'1px solid #d9d9d0' },
+  '.md-table-cell':{ minWidth:'0', padding:'4px 10px', borderRight:'1px solid var(--line)', borderBottom:'1px solid var(--line)', whiteSpace:'normal', overflowWrap:'anywhere' },
+  '.md-table-cell:first-child':{ borderLeft:'1px solid var(--line)' },
+  '.md-table-header .md-table-cell':{ fontWeight:'650', backgroundColor:'var(--panel)', borderTop:'1px solid var(--line)' },
   // CodeMirror paints the selection underneath the editable lines.
-  '.cm-line.md-table-source':{ padding:'4px 6px', backgroundColor:'rgb(108 103 53 / 6%)', borderLeft:'1px solid #d9d9d0', borderRight:'1px solid #d9d9d0' },
+  '.cm-line.md-table-source':{ padding:'4px 6px', backgroundColor:'var(--row-highlight)', borderLeft:'1px solid var(--line)', borderRight:'1px solid var(--line)' },
   // The alignment syntax has no rendered row. Its hit area overlays the header seam.
   '.cm-line.md-table-divider':{ position:'relative', height:'0', minHeight:'0', lineHeight:'0', zIndex:'1' },
   '.md-table-divider-widget':{
     position:'absolute', top:'-4px', left:'0', right:'0', height:'8px',
-    boxSizing:'border-box', cursor:'text', borderLeft:'1px solid #d9d9d0', borderRight:'1px solid #d9d9d0'
+    boxSizing:'border-box', cursor:'text', borderLeft:'1px solid var(--line)', borderRight:'1px solid var(--line)'
   },
-  '.md-task':{ accentColor:'#24684d', verticalAlign:'middle', margin:'0 4px 0 0' },
-  '.md-rule':{ color:'#a6a99c', borderBottom:'1px solid #d9d9d0' },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground':{ backgroundColor:'#cde2d4' },
-  '.cm-cursor':{ borderLeftColor:'#24684d' }
+  '.md-task':{ accentColor:'var(--accent)', verticalAlign:'middle', margin:'0 4px 0 0' },
+  '.md-rule':{ color:'var(--subtle)', borderBottom:'1px solid var(--line)' },
+  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground':{ backgroundColor:'var(--editor-selection) !important' },
+  '.cm-cursor':{ borderLeftColor:'var(--accent)' }
 });
 
 function commandClickedLink(event) {
@@ -465,9 +497,9 @@ export function createEditor(parent, source, onChange, openLink, getImageBaseUrl
     // The supplied ShadowRoot keeps selection and style handling inside the extension.
     root:parent.getRootNode(),
     state:EditorState.create({ doc:source, extensions:[
-      markdown({ base:markdownLanguage, extensions:[inlineImageSyntax] }), history(), drawSelection(),
+      markdown({ base:markdownLanguage, extensions:[inlineImageSyntax, pageBreakSyntax] }), history(), drawSelection(),
       EditorView.lineWrapping, livePreview(getImageBaseUrl, renderCell), extendTableAlignment, theme,
-      syntaxHighlighting(HighlightStyle.define([{ tag:tags.processingInstruction, color:'#97998e' }])),
+      syntaxHighlighting(HighlightStyle.define([{ tag:tags.processingInstruction, color:'var(--syntax)' }])),
       EditorView.contentAttributes.of({ 'aria-label':'Markdown live preview', spellcheck:'true' }),
       EditorView.mouseSelectionStyle.of(tableMouseSelection),
       EditorView.domEventHandlers({
