@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Save Markdown</title>
+  <style>
+    body { max-width:480px; margin:64px auto; padding:0 20px; background:#faf9f6; color:#30342e; font:16px system-ui,sans-serif; }
+    h1 { font-size:24px; overflow-wrap:anywhere; }
+    button { font:inherit; padding:8px 12px; }
+  </style>
+  <script defer src="storage-client.js"></script>
+  <script defer src="save-picker.js"></script>
+  <script defer src="save-as.js"></script>
+</head>
+<body>
+  <h1>Save Markdown</h1>
+  <button class="save" type="button" disabled>Choose save location</button>
+  <button class="cancel" type="button">Cancel</button>
+  <p role="status"></p>
+</body>
+</html>

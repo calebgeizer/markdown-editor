@@ -24,6 +24,7 @@
         "vendor/purify.js",
         "vendor/markdown-editor.js",
         "storage-client.js",
+        "save-picker.js",
         "viewer.js"
       ],
       "run_at": "document_idle"

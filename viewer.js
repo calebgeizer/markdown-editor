@@ -25,7 +25,9 @@
     try { filename = decodeURIComponent(filename); } catch {}
   }
   let savedFilename = filename;
+  const sourceUrl = isExtensionDocument ? storedDraft?.sourceUrl : location.href;
   let savedPath = storedDraft?.savedPath;
+  let savedAsName = storedDraft?.savedAsName, lastSaveHandle;
   if (location.protocol === 'file:') {
     let path = location.pathname;
     try { path = decodeURIComponent(path); } catch {}
@@ -72,6 +74,7 @@
       blockquote { margin-left:0; padding-left:18px; border-left:3px solid #a2b8a4; color:#686862; }
       table { border-collapse:collapse; display:block; overflow:auto; }
       td,th { border:1px solid #d9d9d0; padding:8px 12px; } img { max-width:100%; }
+      .md-inline-image { height:auto; vertical-align:middle; }
       hr { border:0; border-top:1px solid #d9d9d0; margin:24px 0; }
       footer { display:flex; gap:12px; justify-content:space-between; padding:10px 24px; font-size:11px; color:#8a8a80; }
       .save-info { display:grid; gap:3px; min-width:0; }
@@ -111,6 +114,9 @@
         <button class="save icon-button" type="button" aria-label="Save Markdown" title="Save Markdown (⌘/Ctrl+S)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M7 3v6h10V3M7 21v-8h10v8"/></svg>
         </button>
+        <button class="download icon-button" type="button" aria-label="Download Markdown" title="Download to Downloads">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-4-4 4 4 4-4M5 16v3h14v-3"/></svg>
+        </button>
       </header>
       <main><div class="document"><article aria-label="Markdown document" tabindex="-1"></article><div class="editor" hidden></div></div></main>
       <footer>
@@ -122,12 +128,36 @@
   const modeButton = root.querySelector('.mode'), status = root.querySelector('[role="status"]');
   const saveLocation = root.querySelector('.save-location');
   const saveButton = root.querySelector('.save'), draftLabel = root.querySelector('.draft-label');
+  const downloadButton = root.querySelector('.download');
   const sync = root.querySelector('.draft-sync');
   const syncedIcon = sync.querySelector('.synced'), syncingIcon = sync.querySelector('.syncing');
   const syncError = sync.querySelector('.sync-error');
   const titleInput = root.querySelector('.filename');
-  let renderedMarkdown, renderTimer;
+  let renderedMarkdown, renderedImageBaseUrl, renderTimer;
   titleInput.value = filename;
+
+  const embeddedImages = new Map();
+  const embedPrefix = crypto.getRandomValues(new Uint32Array(4)).join('-');
+  const markdownParser = new marked.Marked({
+    gfm:true,
+    extensions:[{
+      name:'inlineImage',
+      level:'inline',
+      start(text) { return text.indexOf('![['); },
+      tokenizer(text) {
+        const match = MarkdownEditor.matchInlineImage(text);
+        if (match) return { type:'inlineImage', ...match };
+      },
+      renderer(token) {
+        const id = `${embedPrefix}-${embeddedImages.size}`;
+        embeddedImages.set(id, token.target);
+        return `<span data-md-embed="${id}"></span>`;
+      }
+    }]
+  });
+  function getImageBaseUrl() {
+    return sourceUrl ?? (savedPath ? MarkdownEditor.localFileUrl(savedPath) : location.href);
+  }
 
   function sanitize(html) {
     const fragment = DOMPurify.sanitize(html, {
@@ -155,7 +185,7 @@
   }
   function updateStatus() {
     const dirty = hasUnsavedChanges();
-    const isDraft = storedDraft || dirty || (isExtensionDocument && !savedPath);
+    const isDraft = storedDraft || dirty || (isExtensionDocument && !savedPath && !savedAsName);
     const syncing = typingTimer !== undefined || Boolean(draftWrite);
     const draftError = dirty && !syncing;
     const syncLabel = syncing ? 'Draft autosave pending' : draftError ? 'Draft has unsaved changes' : storedDraft ? 'Draft saved locally' : 'No unsaved changes';
@@ -169,9 +199,9 @@
     if (saveNotice) status.textContent = saveNotice;
     else if (dirty) status.textContent = 'Unsaved edits';
     else if (storedDraft) status.textContent = 'Draft saved';
-    else status.textContent = savedPath ? 'Saved' : 'Save to choose a location';
-    saveLocation.textContent = savedPath ?? 'No local file saved';
-    saveLocation.title = savedPath ?? '';
+    else status.textContent = savedPath || savedAsName ? 'Saved' : 'Save to choose a location';
+    saveLocation.textContent = savedPath ?? savedAsName ?? 'No local file saved';
+    saveLocation.title = savedPath ?? (savedAsName ? 'Chrome provides only the filename for Save As' : '');
   }
   function commitTitle() {
     filename = pendingFilename();
@@ -180,9 +210,18 @@
   }
   function render() {
     clearTimeout(renderTimer);
-    if (renderedMarkdown === markdown) return;
-    preview.replaceChildren(sanitize(marked.parse(markdown, { gfm:true })));
+    const baseUrl = getImageBaseUrl();
+    if (renderedMarkdown === markdown && renderedImageBaseUrl === baseUrl) return;
+    embeddedImages.clear();
+    const fragment = sanitize(markdownParser.parse(markdown));
+    for (const placeholder of fragment.querySelectorAll('[data-md-embed]')) {
+      const target = embeddedImages.get(placeholder.dataset.mdEmbed);
+      if (target) placeholder.replaceWith(MarkdownEditor.createInlineImage(target, baseUrl));
+    }
+    embeddedImages.clear();
+    preview.replaceChildren(fragment);
     renderedMarkdown = markdown;
+    renderedImageBaseUrl = baseUrl;
   }
   function printDocument() {
     render();
@@ -209,7 +248,7 @@
           clearTimeout(renderTimer);
           renderTimer = setTimeout(render, 150);
           documentChanged();
-        }, openLink);
+        }, openLink, getImageBaseUrl);
       }
       richEditor.focus();
       richEditor.requestMeasure();
@@ -247,6 +286,8 @@
       storedDraft = await requestStorage('save-draft', {
         ...snapshot,
         savedPath,
+        savedAsName,
+        sourceUrl,
         id: storedDraft?.id,
         revision: storedDraft?.revision
       });
@@ -277,30 +318,69 @@
     });
     updateStatus();
   }
-  async function save() {
+  async function downloadMarkdown(snapshot) {
+    const id = await requestStorage('start-save', snapshot);
+    let result = await requestStorage('save-status', { id });
+    while (result.state === 'in_progress') {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      result = await requestStorage('save-status', { id });
+    }
+    return result;
+  }
+  async function saveFromInsecurePage(snapshot) {
+    const token = crypto.getRandomValues(new Uint32Array(4)).join('-');
+    let result;
+    const relay = (message, sender, respond) => {
+      if (sender.id !== chrome.runtime.id || message?.token !== token) return;
+      if (message.type === 'save-picker-file') respond(snapshot);
+      if (message.type === 'save-picker-result') {
+        result = message.result;
+        respond(true);
+      }
+    };
+    chrome.runtime.onMessage.addListener(relay);
+    try {
+      const tabId = await requestStorage('open-save-picker', { token });
+      while (!result) {
+        const open = await requestStorage('save-picker-open', { tabId });
+        if (!open) return result ?? { state:'cancelled' };
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      return result;
+    } finally {
+      chrome.runtime.onMessage.removeListener(relay);
+    }
+  }
+  async function saveWithPicker(snapshot) {
+    if (!window.showSaveFilePicker) return saveFromInsecurePage(snapshot);
+    lastSaveHandle = await writeWithSavePicker(snapshot.filename, snapshot.markdown, lastSaveHandle);
+    return { state:'complete', filename:lastSaveHandle.name };
+  }
+  async function save(saveAs = true) {
     if (saveButton.disabled) return;
     commitTitle();
     const snapshot = { filename, markdown };
-    saveButton.disabled = true;
-    saveNotice = 'Choose a save location…';
+    saveButton.disabled = downloadButton.disabled = true;
+    saveNotice = saveAs ? 'Choose a save location…' : 'Downloading…';
     updateStatus();
     try {
-      const id = await requestStorage('start-save', snapshot);
-      let result = await requestStorage('save-status', { id });
-      while (result.state === 'in_progress') {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        result = await requestStorage('save-status', { id });
-      }
+      const result = await (saveAs ? saveWithPicker(snapshot) : downloadMarkdown(snapshot));
       if (result.state === 'cancelled') {
         saveNotice = 'Save canceled';
         return;
       }
-      if (result.state !== 'complete' || !result.path) throw new Error('Save did not complete.');
+      if (result.state !== 'complete' || !(saveAs ? result.filename : result.path)) throw new Error('Save did not complete.');
 
       downloadCleanup = true;
       if (draftWrite) await draftWrite;
+      const previousImageBaseUrl = getImageBaseUrl();
       savedPath = result.path;
-      savedFilename = savedPath.split(/[/\\]/).pop();
+      savedAsName = saveAs ? result.filename : undefined;
+      if (getImageBaseUrl() !== previousImageBaseUrl) {
+        richEditor?.refreshImages();
+        render();
+      }
+      savedFilename = saveAs ? result.filename : snapshot.filename;
       savedText = snapshot.markdown;
       if (pendingFilename() === snapshot.filename) {
         filename = savedFilename;
@@ -317,12 +397,12 @@
         }
       }
       updateDraftUrl();
-    } catch {
-      saveNotice = 'Could not save the file. Try again.';
+    } catch (error) {
+      saveNotice = error.name === 'AbortError' ? 'Save canceled' : 'Could not save the file. Try again.';
     } finally {
       const saved = downloadCleanup;
       downloadCleanup = false;
-      saveButton.disabled = false;
+      saveButton.disabled = downloadButton.disabled = false;
       updateStatus();
       if (saved && typingTimer === undefined) saveDraft();
     }
@@ -346,7 +426,8 @@
     if (editing) richEditor.focus();
     else preview.focus({ preventScroll:true });
   });
-  saveButton.addEventListener('click', save);
+  saveButton.addEventListener('click', () => save());
+  downloadButton.addEventListener('click', () => save(false));
   root.querySelector('.print').addEventListener('click', printDocument);
   window.addEventListener('beforeprint', () => {
     // Chromium can reject Trusted Types callbacks while dispatching this event.

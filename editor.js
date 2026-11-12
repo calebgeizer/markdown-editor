@@ -4,6 +4,22 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import { createInlineImage, matchInlineImage } from './inline-image.js';
+
+export { createInlineImage, localFileUrl, matchInlineImage } from './inline-image.js';
+
+const inlineImageSyntax = {
+  defineNodes:['InlineImage'],
+  parseInline:[{
+    name:'InlineImage',
+    before:'Image',
+    parse(context, next, position) {
+      if (next !== 33 || context.slice(position, position + 3) !== '![[') return -1;
+      const match = matchInlineImage(context.slice(position, context.end));
+      return match ? context.addElement(context.elt('InlineImage', position, position + match.raw.length)) : -1;
+    }
+  }]
+};
 
 class Bullet extends WidgetType {
   toDOM() {
@@ -30,13 +46,35 @@ class Task extends WidgetType {
   }
 }
 
-function decorations(view) {
+class InlineImage extends WidgetType {
+  constructor(from, target, baseUrl) {
+    super();
+    this.from = from;
+    this.target = target;
+    this.baseUrl = baseUrl;
+  }
+  eq(other) { return this.from === other.from && this.target === other.target && this.baseUrl === other.baseUrl; }
+  toDOM(view) {
+    const element = createInlineImage(this.target, this.baseUrl);
+    element.addEventListener('mousedown', event => event.preventDefault());
+    element.addEventListener('click', () => {
+      view.dispatch({ selection:{ anchor:this.from + 3 } });
+      view.focus();
+    });
+    return element;
+  }
+}
+
+function decorations(view, imageBaseUrl) {
   const { state } = view;
   const ranges = [], lines = new Map();
   const selectedLines = state.selection.ranges.map(range => ({
     from:state.doc.lineAt(range.from).from, to:state.doc.lineAt(range.to).to
   }));
   const active = (from, to) => selectedLines.some(line => from <= line.to && to >= line.from);
+  // Keep completed syntax visible while the caret is directly after its closing marker.
+  const revealInlineSource = (from, to) => state.selection.ranges.some(range =>
+    range.empty ? range.head > from && range.head <= to : range.from < to && range.to > from);
   const lineClass = (position, name) => {
     const from = state.doc.lineAt(position).from;
     if (!lines.has(from)) lines.set(from, new Set());
@@ -86,13 +124,18 @@ function decorations(view) {
       if (name === 'ListMark' && !/^\d/.test(state.sliceDoc(from, to))) hide(from, to, new Bullet());
       if (name === 'TaskMarker') hide(from, to, new Task(from, /x/i.test(state.sliceDoc(from, to))));
       if (name === 'QuoteMark') { lineClass(from, 'md-quote'); hide(from, to); }
+      if (name === 'InlineImage') {
+        const { target } = matchInlineImage(state.sliceDoc(from, to));
+        hide(from, to, new InlineImage(from, target, imageBaseUrl), revealInlineSource(from, to));
+        return false;
+      }
       if (name === 'Link') {
         const opening = node.firstChild;
         const closing = node.lastChild;
         const labelEnd = node.getChild('LinkMark', 'LinkMark');
         if (opening?.name === 'LinkMark' && closing?.name === 'LinkMark' &&
             labelEnd && state.sliceDoc(closing.from, closing.to) === ')') {
-          const reveal = state.selection.ranges.some(range => range.from < to && range.to > from);
+          const reveal = revealInlineSource(from, to);
           inlineLink = { from, to, reveal };
           hide(opening.from, opening.to, undefined, reveal);
           hideLinkSuffix(labelEnd.from, to, reveal);
@@ -129,13 +172,22 @@ function decorations(view) {
   return Decoration.set(ranges, true);
 }
 
-const livePreview = ViewPlugin.fromClass(class {
-  constructor(view) { this.decorations = decorations(view); }
-  update(update) {
-    if (update.docChanged || update.selectionSet || update.viewportChanged ||
-      syntaxTree(update.startState) !== syntaxTree(update.state)) this.decorations = decorations(update.view);
-  }
-}, { decorations:plugin => plugin.decorations });
+function livePreview(getImageBaseUrl) {
+  return ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.imageBaseUrl = getImageBaseUrl();
+      this.decorations = decorations(view, this.imageBaseUrl);
+    }
+    update(update) {
+      const baseUrl = getImageBaseUrl();
+      if (baseUrl !== this.imageBaseUrl || update.docChanged || update.selectionSet || update.viewportChanged ||
+          syntaxTree(update.startState) !== syntaxTree(update.state)) {
+        this.imageBaseUrl = baseUrl;
+        this.decorations = decorations(update.view, baseUrl);
+      }
+    }
+  }, { decorations:plugin => plugin.decorations });
+}
 
 function toggleInline(delimiter, nodeName) {
   return view => {
@@ -179,6 +231,7 @@ const theme = EditorView.theme({
   '.md-quote':{ borderLeft:'3px solid #a2b8a4', paddingLeft:'14px', color:'#686862' },
   '.md-link':{ color:'#24684d', textDecoration:'underline', textUnderlineOffset:'3px' },
   '.md-image':{ color:'#77776e' }, '.md-bullet':{ color:'#7e897a' },
+  '.md-inline-image':{ maxWidth:'100%', height:'auto', verticalAlign:'middle', cursor:'text' },
   '.md-task':{ accentColor:'#24684d', verticalAlign:'middle', margin:'0 4px 0 0' },
   '.md-rule':{ color:'#a6a99c', borderBottom:'1px solid #d9d9d0' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground':{ backgroundColor:'#cde2d4' },
@@ -190,14 +243,14 @@ function commandClickedLink(event) {
   return event.target.closest('[data-md-link]')?.dataset.mdLink;
 }
 
-export function createEditor(parent, source, onChange, openLink) {
+export function createEditor(parent, source, onChange, openLink, getImageBaseUrl) {
   const view = new EditorView({
     parent,
     // The supplied ShadowRoot keeps selection and style handling inside the extension.
     root:parent.getRootNode(),
     state:EditorState.create({ doc:source, extensions:[
-      markdown({ base:markdownLanguage }), history(), drawSelection(),
-      EditorView.lineWrapping, livePreview, theme,
+      markdown({ base:markdownLanguage, extensions:[inlineImageSyntax] }), history(), drawSelection(),
+      EditorView.lineWrapping, livePreview(getImageBaseUrl), theme,
       syntaxHighlighting(HighlightStyle.define([{ tag:tags.processingInstruction, color:'#97998e' }])),
       EditorView.contentAttributes.of({ 'aria-label':'Markdown live preview', spellcheck:'true' }),
       EditorView.domEventHandlers({
@@ -224,5 +277,10 @@ export function createEditor(parent, source, onChange, openLink) {
       EditorView.updateListener.of(update => { if (update.docChanged) onChange(update.state.sliceDoc()); })
     ] })
   });
-  return { focus:() => view.focus(), blur:() => view.contentDOM.blur(), requestMeasure:() => view.requestMeasure() };
+  return {
+    focus:() => view.focus(),
+    blur:() => view.contentDOM.blur(),
+    requestMeasure:() => view.requestMeasure(),
+    refreshImages:() => view.dispatch({})
+  };
 }

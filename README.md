@@ -15,6 +15,8 @@ A light weight chrome extension that lets you create, view and edit markdown fil
 - Autosave Drafts
 - View recently opened files
 - Live Preview editor
+- Inline images with `![[image.jpg]]`. Use a path relative, an absolute local path, or an HTTP(S) image URL.
 - Print Button with PDF Export
+- Save As and download options
 - Offline Support
 

@@ -10,7 +10,7 @@ function ensureDownloadDocument() {
       await chrome.offscreen.createDocument({
         url: 'download.html',
         reasons: ['BLOBS'],
-        justification: 'Create local Markdown files for Chrome’s Save As dialog.'
+        justification: 'Create Markdown files for the Download button.'
       });
     })().finally(() => { creatingDownloadDocument = undefined; });
   }
@@ -21,11 +21,11 @@ function revokeDownloadUrl(url) {
   return chrome.runtime.sendMessage({ target: 'download-document', type: 'revoke-blob', url });
 }
 
-async function startSave(filename, markdown) {
+async function startDownload(filename, markdown) {
   await ensureDownloadDocument();
   const url = await chrome.runtime.sendMessage({ target: 'download-document', type: 'create-blob', markdown });
   try {
-    return await chrome.downloads.download({ url, filename, saveAs: true });
+    return await chrome.downloads.download({ url, filename, saveAs: false });
   } catch (error) {
     await revokeDownloadUrl(url);
     throw error;
@@ -96,9 +96,33 @@ async function transact(stores, mode, operation) {
 async function handleMessage(message, sender) {
   switch (message.type) {
     case 'start-save':
-      return startSave(message.filename, message.markdown);
+      return startDownload(message.filename, message.markdown);
     case 'save-status':
       return saveStatus(message.id);
+    case 'open-save-picker': {
+      const url = new URL(chrome.runtime.getURL('save-as.html'));
+      url.hash = new URLSearchParams({ tab:sender.tab.id, token:message.token }).toString();
+      const tab = await chrome.tabs.create({ url:url.href, windowId:sender.tab.windowId });
+      return tab.id;
+    }
+    case 'save-picker-open': {
+      try {
+        const tab = await chrome.tabs.get(message.tabId);
+        const url = tab.pendingUrl ?? tab.url;
+        return !url || url === 'about:blank' || url.split('#')[0] === chrome.runtime.getURL('save-as.html');
+      } catch {
+        return false;
+      }
+    }
+    case 'save-picker-file':
+    case 'save-picker-result': {
+      if (sender.url?.split('#')[0] !== chrome.runtime.getURL('save-as.html')) return;
+      return chrome.tabs.sendMessage(message.sourceTabId, {
+        type:message.type,
+        token:message.token,
+        result:message.result
+      }, { frameId:0 });
+    }
     case 'record-open': {
       const url = new URL(sender.url);
       if (!['file:', 'https:', 'http:'].includes(url.protocol) || !/\.md$/i.test(url.pathname)) return;
@@ -134,6 +158,8 @@ async function handleMessage(message, sender) {
           filename: message.filename,
           markdown: message.markdown,
           savedPath: message.savedPath,
+          savedAsName: message.savedAsName,
+          sourceUrl: message.sourceUrl,
           updatedAt: Date.now()
         };
         store.put(draft);

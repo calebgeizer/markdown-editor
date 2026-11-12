@@ -11,8 +11,18 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.goto('http://markdown.test/notes.md');
   await page.evaluate(()=>{
     let savedPath;
+    window.downloadRequests=0;
+    window.showSaveFilePicker=async ({suggestedName})=>{
+      if(window.cancelNextSave) throw new DOMException('Canceled','AbortError');
+      let content;
+      return {name:suggestedName,createWritable:async()=>({
+        write:async markdown=>{content=markdown;},
+        close:async()=>{window.savedMarkdown=content;}
+      })};
+    };
     window.requestStorage=async (type,fields)=>{
       if(type==='start-save'){
+        window.downloadRequests++;
         const link=document.createElement('a');
         link.href=URL.createObjectURL(new Blob([fields.markdown],{type:'text/markdown'}));
         link.download=fields.filename;
@@ -25,8 +35,20 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
       throw new Error('Unexpected extension request '+type);
     };
   });
-  for(const script of ['vendor/marked.js','vendor/purify.js','vendor/markdown-editor.js','viewer.js'])await page.addScriptTag({path:base+'/'+script});
-  async function download(){const promise=page.waitForEvent('download');await page.getByRole('button',{name:'Save Markdown',exact:true}).click();const file=await promise;return fs.readFileSync(await file.path(),'utf8');}
+  for(const script of ['vendor/marked.js','vendor/purify.js','vendor/markdown-editor.js','save-picker.js','viewer.js'])await page.addScriptTag({path:base+'/'+script});
+  async function download(saveAs=true){
+    if(saveAs){
+      const count=await page.evaluate(()=>window.downloadRequests);
+      await page.getByRole('button',{name:'Save Markdown',exact:true}).click();
+      await page.getByRole('status').filter({hasText:/^Saved$/}).waitFor();
+      assert.equal(await page.evaluate(()=>window.downloadRequests),count,'Save As must not use Chrome downloads');
+      return page.evaluate(()=>window.savedMarkdown);
+    }
+    const promise=page.waitForEvent('download');
+    await page.getByRole('button',{name:'Download Markdown',exact:true}).click();
+    const file=await promise;
+    return fs.readFileSync(await file.path(),'utf8');
+  }
   const title=page.getByRole('textbox',{name:'File title'});
   const editor=page.getByRole('textbox',{name:'Markdown live preview'});
   assert.equal(await page.locator('.filename + .draft-sync + .draft-label').count(),1,
@@ -37,8 +59,16 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
     assert.equal(await editor.evaluate(element=>element.getRootNode().activeElement===element),true,
       'Tab from the title must focus the editor in either mode');
   }
-  assert.equal(await download(),source,'editing without changes must preserve source exactly');
+  assert.equal(await page.locator('.save + .download').count(),1,'Download must be to the right of Save');
+  assert.equal(await download(false),source,'quick download must preserve the Markdown source exactly');
   assert.equal(await page.locator('.save-location').innerText(),'/test/notes.md');
+  await page.evaluate(()=>{window.cancelNextSave=true;});
+  await page.getByRole('button',{name:'Save Markdown',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Save canceled'}).waitFor();
+  assert.equal(await page.locator('.save-location').innerText(),'/test/notes.md');
+  await page.evaluate(()=>{window.cancelNextSave=false;});
+  assert.equal(await download(),source);
+  assert.equal(await page.locator('.save-location').innerText(),'notes.md','the direct file picker exposes the filename');
   assert.equal(await page.locator('.md-code-line .md-bold').count(),0,'code must stay literal');
   await page.locator('.md-task').check();assert.equal(await download(),source.replace('- [ ] Task','- [x] Task'));
   await page.locator('.md-task').uncheck();assert.equal(await download(),source);
@@ -85,9 +115,13 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.keyboard.insertText(linkSource.slice(0,-1));
   assert.equal(await page.locator('.cm-line').innerText(),linkSource.slice(0,-1),'an incomplete link must show its source');
   await page.keyboard.insertText(')');
-  assert.equal(await page.locator('.cm-line').innerText(),'Project','a caret just past the closing parenthesis must show only the label');
+  assert.equal(await page.locator('.cm-line').innerText(),linkSource,'a caret at the closing parenthesis must keep the link source visible');
+  await page.keyboard.insertText('.');
+  assert.equal(await page.locator('.cm-line').innerText(),'Project.','punctuation after a link must show its preview');
+  await page.keyboard.press('Backspace');
   await page.keyboard.insertText(' and [Notes](notes.md)');
-  assert.equal(await page.locator('.cm-line').innerText(),'Project and Notes');
+  await page.keyboard.press('Space');
+  assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),'Project and Notes');
   for (const [label,url] of [['Project','https://example.com/guide_(start)'],['Notes','http://markdown.test/notes.md']]) {
     const context=page.context();
     await context.route(url,route=>route.fulfill({contentType:'text/plain',body:label}));
@@ -99,11 +133,11 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
     assert.equal(await linkedPage.evaluate(()=>window.opener),null);
     await linkedPage.close();
   }
-  assert.equal(await page.locator('.cm-line').innerText(),'Project and Notes','command-click must leave the caret outside the link');
+  assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),'Project and Notes','command-click must leave the caret outside the link');
   await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.locator('.cm-line').innerText(),'Project and [Notes](notes.md)','only the link containing the caret must reveal its source');
+  assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),'Project and [Notes](notes.md)','only the link at the caret must reveal its source');
   await page.locator('.md-link').filter({hasText:'Project'}).click();
-  assert.equal(await page.locator('.cm-line').innerText(),linkSource+' and Notes','clicking the label must reveal the whole link for editing');
+  assert.equal((await page.locator('.cm-line').innerText()).trimEnd(),linkSource+' and Notes','clicking the label must reveal the whole link for editing');
   await editor.click();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.type('# New heading\nNext line');
   await page.keyboard.press('Home');
   if(process.env.SCREENSHOT_PATH) await page.screenshot({path:process.env.SCREENSHOT_PATH});
@@ -128,6 +162,26 @@ const source='# Heading\n\nA **bold** paragraph with *italic* and ~~strike~~.\n\
   await page.waitForFunction(()=>document.querySelector('body > div').shadowRoot.querySelector('article h1')?.textContent==='Browser menu heading');
   await page.setViewportSize({width:390,height:844});assert.ok(await page.locator('.document').evaluate(e=>e.getBoundingClientRect().width<=390));
   assert.deepEqual(errors,[]);assert.deepEqual(requests,['http://markdown.test/notes.md']);
+  const imageUrl='https://images.test/sample.svg';
+  const imageFixture='<svg xmlns="http://www.w3.org/2000/svg" width="48" height="32"><rect width="48" height="32" fill="green"/></svg>';
+  await page.route(imageUrl,route=>route.fulfill({contentType:'image/svg+xml',body:imageFixture}));
+  await editor.click();await page.keyboard.press('ControlOrMeta+a');
+  const imageSource='![['+imageUrl+']]';
+  await page.keyboard.insertText('Before '+imageSource);
+  const inlineImage=editor.locator('img.md-inline-image');
+  assert.equal(await editor.innerText(),'Before '+imageSource,'a caret at the closing brackets must keep the image source visible');
+  assert.equal(await inlineImage.count(),0);
+  await page.keyboard.insertText('x');
+  await inlineImage.waitFor();
+  await page.keyboard.press('Backspace');
+  assert.equal(await inlineImage.count(),0,'returning to the closing brackets must reveal the image source');
+  await page.keyboard.press('Enter');
+  assert.equal(await inlineImage.evaluate(async image=>{await image.decode();return image.naturalWidth;}),48);
+  await inlineImage.click();
+  assert.match(await editor.innerText(),/!\[\[https:\/\/images.test\/sample.svg\]\]/,'clicking an image must reveal the editable path');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('article img.md-inline-image').evaluate(async image=>{await image.decode();return image.naturalWidth;}),48);
+  assert.deepEqual(errors,[]);
   console.log('Passed: source-preserving edit/save; active-line marker reveal; inline links and Command-click; deletion of existing # and ** formatting; compact heading height; typed headings; single newline; undo/redo; reading/editing toggle; print preparation; mobile layout; no network requests or JS errors.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});
